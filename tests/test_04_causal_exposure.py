@@ -3,12 +3,13 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+import dataclasses
 from ncm_dock.contracts import CanonicalComplexState, DiscretePoseTokens
 from ncm_dock.featurizer.precompute_dataset import ComplexPrecomputer
 from ncm_dock.generator.block_causal_mask import build_block_causal_mask, verify_causal_mask_zero_leakage
 from ncm_dock.generator.next_scale_transformer import NextScaleTransformer
 from ncm_dock.tokenizer.factored_rvq import FactoredKinematicRVQ
-from ncm_dock.kinematics.forward_kinematics import ForwardKinematics
+from ncm_dock.kinematics.forward_kinematics import ForwardKinematics, rotation_6d_to_matrix, extract_kinematic_params
 from ncm_dock.kinematics.symmetry_rmsd import symmetry_aware_rmsd
 
 def test_04_zero_leakage_jacobian():
@@ -93,13 +94,45 @@ def test_04_perturbation_recovery():
             loss_c.backward()
             opt_clean.step()
             
-            # Train perturbed model (perturb=True: Scale-2 noise injected during teacher forcing)
-            # Conditioning on perturbed Scale-2 while predicting ground-truth Scale 3 & 4
-            # acts as a denoising autoencoder / exposure bias regularizer, ensuring that upstream
-            # rigid-body drift does not cause catastrophic rotamer hallucinations downstream.
+            # Train perturbed model with true corrective torsion targets
             opt_pert.zero_grad()
-            out_p = model_pert(state, tokens, perturb=True)
-            loss_p = F.cross_entropy(out_p["logits_s3"][0], t_s3) + F.cross_entropy(out_p["logits_s4"][0], t_s4)
+            p_s1 = (tokens.scale1_anchor + torch.randint(-1, 2, tokens.scale1_anchor.shape, device=device)) % model_pert.k_s1
+            p_s2a = (tokens.scale2_rigid[:, 0:1] + torch.randint(-1, 2, tokens.scale2_rigid[:, 0:1].shape, device=device)) % model_pert.k_s2a
+            p_s2b = (tokens.scale2_rigid[:, 1:2] + torch.randint(-2, 3, tokens.scale2_rigid[:, 1:2].shape, device=device)) % model_pert.k_s2b
+            p_rigid = torch.cat([p_s2a, p_s2b], dim=-1)
+            perturbed_tokens = DiscretePoseTokens(
+                scale1_anchor=p_s1,
+                scale2_rigid=p_rigid,
+                scale3_core_torsions=tokens.scale3_core_torsions,
+                scale4_fine_torsions=tokens.scale4_fine_torsions
+            )
+            with torch.no_grad():
+                p_params = tokenizer.decode_params(perturbed_tokens, state, up_to_scale=2)
+                tilde_T = p_params.translation.squeeze(0).to(device)
+                tilde_R = rotation_6d_to_matrix(p_params.rotation_6d).squeeze(0).to(device)
+                gt_c = ForwardKinematics.apply(
+                    ref_coords=state.ligand_ref_coords,
+                    rotatable_edges=state.rotatable_edges,
+                    kinematic_masks=state.kinematic_masks,
+                    translation=state.gt_translation,
+                    rotation_6d=state.gt_rotation_6d,
+                    torsions_sc=state.gt_torsions_sc
+                ).squeeze(0).to(device)
+                ref_cent = torch.mean(state.ligand_ref_coords.to(device), dim=0, keepdim=True)
+                X_tgt = torch.mm(gt_c - tilde_T, tilde_R) + ref_cent
+                _, _, corr_tors = extract_kinematic_params(
+                    ref_coords=state.ligand_ref_coords.to(device),
+                    target_coords=X_tgt,
+                    rotatable_edges=state.rotatable_edges.to(device),
+                    kinematic_masks=state.kinematic_masks.to(device)
+                )
+                state_c = dataclasses.replace(state, gt_torsions_sc=corr_tors.cpu())
+                c_toks = tokenizer.encode(state_c)
+                t_s3_corr = c_toks.scale3_core_torsions.to(device).squeeze(0)
+                t_s4_corr = c_toks.scale4_fine_torsions.to(device).squeeze(0)
+
+            out_p = model_pert(state, perturbed_tokens, perturb=False)
+            loss_p = F.cross_entropy(out_p["logits_s3"][0], t_s3_corr) + F.cross_entropy(out_p["logits_s4"][0], t_s4_corr)
             loss_p.backward()
             opt_pert.step()
             
