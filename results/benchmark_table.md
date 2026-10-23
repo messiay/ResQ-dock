@@ -18,9 +18,9 @@ Physical validity is verified via the official **PoseBusters suite (`posebusters
 
 | Pipeline Component | Mean Latency (ms) | Notes |
 | :--- | :---: | :---: |
-| **Stage 1–4 Next-Scale Transformer (4 Passes + Beam Search B=8)** | **53.46 ms** | CPU execution (4 passes, B=8); ~4-8 ms on CUDA |
-| **Stage-3 FreeSolvE Articulated Manifold Relaxation** | **123.43 ms** | 25 steps Adam manifold optimizer |
-| **Total End-to-End Inference per Complex** | **176.89 ms** | Real-time screening capable |
+| **Stage 1–4 Next-Scale Transformer (4 Passes + Beam Search B=8)** | **59.11 ms** | CPU execution (4 passes, B=8); ~4-8 ms on CUDA |
+| **Stage-3 FreeSolvE Articulated Manifold Relaxation** | **130.63 ms** | 25 steps Adam manifold optimizer |
+| **Total End-to-End Inference per Complex** | **189.74 ms** | Real-time screening capable |
 
 > [!NOTE]
 > All kinematics are parameterized on R^3 x SO(3) x T^m via differentiable Rodrigues matrices, guaranteeing that bond lengths, bond angles, and aromatic ring planarity are never violated regardless of step size.

@@ -16,7 +16,8 @@ dependencies = [
     "spyrmsd",
     "scipy",
     "pyyaml",
-    "pytest"
+    "pytest",
+    "freesolve"
 ]
 
 [tool.setuptools.packages.find]

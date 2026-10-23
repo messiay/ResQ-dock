@@ -7,6 +7,13 @@ from ncm_dock.contracts import CanonicalComplexState, ArticulatedPoseParams, Phy
 from ncm_dock.relaxation.base_relaxer import BaseRelaxer
 from ncm_dock.kinematics.forward_kinematics import ForwardKinematics, rotation_6d_to_matrix, matrix_to_rotation_6d
 
+try:
+    import freesolve
+    HAS_FREESOLVE = True
+except Exception:
+    freesolve = None
+    HAS_FREESOLVE = False
+
 class FreeSolvEAdapter(BaseRelaxer):
     """
     Differentiable continuum solvation and C1 logarithmic soft-core Van der Waals engine.
