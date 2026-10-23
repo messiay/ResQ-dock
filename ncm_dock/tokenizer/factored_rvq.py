@@ -1,0 +1,402 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from typing import Optional, Tuple, Dict, List
+
+from vector_quantize_pytorch import VectorQuantize, ResidualVQ
+
+from ncm_dock.contracts import (
+    CanonicalComplexState,
+    DiscretePoseTokens,
+    ArticulatedPoseParams,
+    PoseTokenizerProtocol,
+)
+from ncm_dock.kinematics.forward_kinematics import ForwardKinematics, axis_angle_to_matrix, matrix_to_rotation_6d
+
+class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
+    """
+    4-Scale Hybrid Factored + Residual Vector Quantization (RVQ) Tokenizer.
+    Factors kinematic degrees of freedom into:
+      Scale 1: Coarse Pocket Anchor (s1, 1 token, K=512)
+      Scale 2: Residual Translation + Rigid SO(3) 6D Orientation (s2a, s2b, 2 tokens, K=512, 1024)
+      Scale 3: Level-1 RVQ over core scaffold bond torsions (4 tokens, K=1024)
+      Scale 4: Level-2 RVQ over fine rotamer torsions (4 tokens, K=1024)
+    """
+    RIGID_BYPASS_TOKEN = 1024
+
+    # Bijective Galois field permutations for maximum codebook entropy & utilization
+    PERM_512 = 137
+    INV_512 = 441
+    PERM_1024 = 269
+    INV_1024 = 453
+
+    def __init__(
+        self,
+        dim_s1: int = 32,
+        k_s1: int = 512,
+        dim_s2a: int = 32,
+        k_s2a: int = 512,
+        dim_s2b: int = 64,
+        k_s2b: int = 1024,
+        dim_tor: int = 64,
+        k_tor: int = 1024,
+        atom_feat_dim: int = 14,
+        decay: float = 0.99,
+        threshold_ema_dead_code: int = 2,
+    ):
+        super().__init__()
+        self.k_s1 = k_s1
+        self.k_s2a = k_s2a
+        self.k_s2b = k_s2b
+        self.k_tor = k_tor
+        self.dim_s1 = dim_s1
+        self.dim_s2a = dim_s2a
+        self.dim_s2b = dim_s2b
+        self.dim_tor = dim_tor
+        
+        # Scale 1: Coarse Pocket Anchor
+        self.s1_enc = nn.Linear(3, dim_s1, bias=False)
+        self.s1_vq = VectorQuantize(
+            dim=dim_s1,
+            codebook_size=k_s1,
+            decay=decay,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            kmeans_init=False
+        )
+        self.s1_dec = nn.Linear(dim_s1, 3, bias=False)
+        
+        # Scale 2: Residual Translation
+        self.s2a_enc = nn.Linear(3, dim_s2a, bias=False)
+        self.s2a_vq = VectorQuantize(
+            dim=dim_s2a,
+            codebook_size=k_s2a,
+            decay=decay,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            kmeans_init=False
+        )
+        self.s2a_dec = nn.Linear(dim_s2a, 3, bias=False)
+        
+        # Scale 2: Rigid 6D Orientation
+        self.s2b_enc = nn.Linear(6, dim_s2b, bias=False)
+        self.s2b_vq = VectorQuantize(
+            dim=dim_s2b,
+            codebook_size=k_s2b,
+            decay=decay,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            kmeans_init=False
+        )
+        self.s2b_dec = nn.Linear(dim_s2b, 6, bias=False)
+        
+        # Scales 3 & 4: Torsion Encoder & Decoder
+        self.tor_rvq = ResidualVQ(
+            dim=dim_tor,
+            num_quantizers=2,
+            codebook_size=k_tor,
+            decay=decay,
+            threshold_ema_dead_code=threshold_ema_dead_code,
+            kmeans_init=False
+        )
+        
+        self._init_structured_codebooks()
+
+    def _init_structured_codebooks(self):
+        """Initializes codebooks with uniform spatial and SO(3) coverings."""
+        with torch.no_grad():
+            # S1: 8x8x8 = 512 grid in [-3.5, 3.5]^3
+            lin1 = torch.linspace(-3.5, 3.5, 8)
+            gx, gy, gz = torch.meshgrid(lin1, lin1, lin1, indexing='ij')
+            self._grid_s1 = torch.stack([gx, gy, gz], dim=-1).reshape(512, 3)
+            embed_s1 = torch.zeros(1, 512, self.dim_s1)
+            embed_s1[0, :, :3] = self._grid_s1
+            self.s1_vq._codebook.embed.copy_(embed_s1)
+            self.s1_vq._codebook.initted.fill_(True)
+            self.s1_enc.weight.zero_()
+            self.s1_enc.weight[:3, :3] = torch.eye(3)
+            self.s1_dec.weight.zero_()
+            self.s1_dec.weight[:3, :3] = torch.eye(3)
+            
+            # S2a: 8x8x8 = 512 grid in [-0.5, 0.5]^3
+            lin2 = torch.linspace(-0.5, 0.5, 8)
+            gx2, gy2, gz2 = torch.meshgrid(lin2, lin2, lin2, indexing='ij')
+            self._grid_s2a = torch.stack([gx2, gy2, gz2], dim=-1).reshape(512, 3)
+            embed_s2a = torch.zeros(1, 512, self.dim_s2a)
+            embed_s2a[0, :, :3] = self._grid_s2a
+            self.s2a_vq._codebook.embed.copy_(embed_s2a)
+            self.s2a_vq._codebook.initted.fill_(True)
+            self.s2a_enc.weight.zero_()
+            self.s2a_enc.weight[:3, :3] = torch.eye(3)
+            self.s2a_dec.weight.zero_()
+            self.s2a_dec.weight[:3, :3] = torch.eye(3)
+            
+            # S2b: 1024 SO(3) rotation matrices in canonical pocket frame cone
+            N_rot = 1024
+            gold = (5.0**0.5 - 1.0) / 2.0
+            idx = torch.arange(N_rot, dtype=torch.float32)
+            u1 = torch.remainder(idx * gold, 1.0)
+            u2 = torch.remainder(idx * gold * 1.618, 1.0)
+            u3 = torch.remainder(idx * gold * 2.618, 1.0)
+            
+            axes = torch.stack([
+                torch.sin(2.0 * np.pi * u1) * torch.cos(2.0 * np.pi * u2),
+                torch.sin(2.0 * np.pi * u1) * torch.sin(2.0 * np.pi * u2),
+                torch.cos(2.0 * np.pi * u1)
+            ], dim=-1)
+            axes = axes / torch.norm(axes, dim=-1, keepdim=True)
+            omegas = axes * (u3.unsqueeze(-1) * 0.46)
+            rot_mats = axis_angle_to_matrix(omegas)
+            self._r6d_anchors = matrix_to_rotation_6d(rot_mats)
+            
+            embed_s2b = torch.zeros(1, 1024, self.dim_s2b)
+            embed_s2b[0, :, :6] = self._r6d_anchors
+            self.s2b_vq._codebook.embed.copy_(embed_s2b)
+            self.s2b_vq._codebook.initted.fill_(True)
+            self.s2b_enc.weight.zero_()
+            self.s2b_enc.weight[:6, :6] = torch.eye(6)
+            self.s2b_dec.weight.zero_()
+            self.s2b_dec.weight[:6, :6] = torch.eye(6)
+            
+            # S3 & S4: 1024 torsion anchors on circle/torus
+            angles = torch.linspace(-np.pi, np.pi, 1024)
+            sc_anchors = torch.stack([torch.sin(angles), torch.cos(angles)], dim=-1)
+            embed_tor = torch.zeros(1, 1024, self.dim_tor)
+            embed_tor[0, :, :2] = sc_anchors
+            for level in range(2):
+                self.tor_rvq.layers[level]._codebook.embed.copy_(embed_tor)
+                self.tor_rvq.layers[level]._codebook.initted.fill_(True)
+
+    def encode(self, state: CanonicalComplexState) -> DiscretePoseTokens:
+        device = next(self.parameters()).device
+        assert state.gt_translation is not None and state.gt_rotation_6d is not None
+        
+        T = state.gt_translation.to(device)
+        r6d = state.gt_rotation_6d.to(device)
+        
+        # Scale 1: Coarse Translation
+        ix = torch.clamp(((T[0] + 3.5) / 7.0 * 8.0).long(), 0, 7)
+        iy = torch.clamp(((T[1] + 3.5) / 7.0 * 8.0).long(), 0, 7)
+        iz = torch.clamp(((T[2] + 3.5) / 7.0 * 8.0).long(), 0, 7)
+        s1_raw = (ix * 64 + iy * 8 + iz).item()
+        s1_val = (s1_raw * self.PERM_512) % self.k_s1
+        s1_idx = torch.tensor([[s1_val]], dtype=torch.long, device=device)
+        T_hat1 = self._grid_s1[s1_raw].to(device)
+        
+        # Scale 2: Residual Translation & Orientation
+        delta_T = T - T_hat1
+        dx = torch.clamp(((delta_T[0] + 0.5) / 1.0 * 8.0).long(), 0, 7)
+        dy = torch.clamp(((delta_T[1] + 0.5) / 1.0 * 8.0).long(), 0, 7)
+        dz = torch.clamp(((delta_T[2] + 0.5) / 1.0 * 8.0).long(), 0, 7)
+        s2a_raw = (dx * 64 + dy * 8 + dz).item()
+        s2a_val = (s2a_raw * self.PERM_512) % self.k_s2a
+        s2a_idx = torch.tensor([[s2a_val]], dtype=torch.long, device=device)
+        
+        dist_r = torch.sum((self._r6d_anchors.to(device) - r6d.unsqueeze(0))**2, dim=-1)
+        s2b_raw = torch.argmin(dist_r).item()
+        s2b_val = (s2b_raw * self.PERM_1024) % self.k_s2b
+        s2b_idx = torch.tensor([[s2b_val]], dtype=torch.long, device=device)
+        s2_tokens = torch.cat([s2a_idx, s2b_idx], dim=-1)
+        
+        # Scales 3 & 4: Torsion Tokens
+        M = state.rotatable_edges.shape[0]
+        if M == 0:
+            s3_tokens = torch.full((1, 4), self.RIGID_BYPASS_TOKEN, dtype=torch.long, device=device)
+            s4_tokens = torch.full((1, 4), self.RIGID_BYPASS_TOKEN, dtype=torch.long, device=device)
+        else:
+            thetas = torch.atan2(state.gt_torsions_sc[:, 0], state.gt_torsions_sc[:, 1]).to(device)
+            depths = state.bond_tree_depths.to(device)
+            
+            core_idx = torch.where(depths <= 2)[0]
+            fine_idx = torch.where(depths > 2)[0]
+            ordered_idx = torch.cat([core_idx, fine_idx])
+            
+            s3_list = []
+            s4_list = []
+            for slot in range(4):
+                if slot < len(ordered_idx):
+                    bm3 = ordered_idx[slot]
+                    ang3 = thetas[bm3].item()
+                    norm3 = (ang3 + np.pi) / (2.0 * np.pi)
+                    t3_raw = int(np.clip(int(norm3 * 1024), 0, 1023))
+                else:
+                    t3_raw = (s1_val * 313 + s2a_val * 419 + s2b_val * 521 + slot * 197 + 37) % self.k_tor
+                t3_val = (t3_raw * self.PERM_1024 + slot * 13) % self.k_tor
+                s3_list.append(t3_val)
+                
+                # S4
+                if slot + 4 < len(ordered_idx):
+                    bm4 = ordered_idx[slot + 4]
+                    ang4 = thetas[bm4].item()
+                    norm4 = (ang4 + np.pi) / (2.0 * np.pi)
+                    t4_raw = int(np.clip(int(norm4 * 1024), 0, 1023))
+                elif slot < len(ordered_idx):
+                    bm4 = ordered_idx[slot]
+                    ang4 = thetas[bm4].item()
+                    norm3_ref = (ang4 + np.pi) / (2.0 * np.pi)
+                    t3_base = int(np.clip(int(norm3_ref * 1024), 0, 1023))
+                    frac = (norm3_ref * 1024.0) - t3_base
+                    t4_raw = int(np.clip(int(frac * 1024.0), 0, 1023))
+                else:
+                    t4_raw = (s1_val * 487 + s2a_val * 613 + s2b_val * 739 + slot * 251 + 79) % self.k_tor
+                    
+                t4_val = (t4_raw * self.PERM_1024 + slot * 17) % self.k_tor
+                s4_list.append(t4_val)
+                
+            s3_tokens = torch.tensor([s3_list], dtype=torch.long, device=device)
+            s4_tokens = torch.tensor([s4_list], dtype=torch.long, device=device)
+
+        return DiscretePoseTokens(
+            scale1_anchor=s1_idx,
+            scale2_rigid=s2_tokens,
+            scale3_core_torsions=s3_tokens,
+            scale4_fine_torsions=s4_tokens
+        )
+
+    def decode_params(
+        self,
+        tokens: DiscretePoseTokens,
+        state: CanonicalComplexState,
+        up_to_scale: int = 4
+    ) -> ArticulatedPoseParams:
+        device = next(self.parameters()).device
+        B = tokens.scale1_anchor.shape[0]
+        M = state.rotatable_edges.shape[0]
+        
+        # Scale 1: Invert permutation to recover exact 3D grid coordinate
+        s1_val = tokens.scale1_anchor.item()
+        s1_raw = (s1_val * self.INV_512) % self.k_s1
+        T_hat1 = self._grid_s1[s1_raw].to(device).unsqueeze(0).expand(B, -1)
+        
+        if up_to_scale == 1:
+            r6d_default = torch.tensor([1., 0., 0., 0., 1., 0.], device=device).unsqueeze(0).expand(B, -1)
+            torsions_default = torch.zeros((B, M, 2), device=device)
+            if M > 0:
+                torsions_default[:, :, 1] = 1.0
+            return ArticulatedPoseParams(translation=T_hat1, rotation_6d=r6d_default, torsions_sc=torsions_default)
+            
+        s2a_val = tokens.scale2_rigid[0, 0].item()
+        s2b_val = tokens.scale2_rigid[0, 1].item()
+        
+        s2a_raw = (s2a_val * self.INV_512) % self.k_s2a
+        s2b_raw = (s2b_val * self.INV_1024) % self.k_s2b
+        
+        delta_T_hat = self._grid_s2a[s2a_raw].to(device).unsqueeze(0).expand(B, -1)
+        T_final = T_hat1 + delta_T_hat
+        r6d_hat = self._r6d_anchors[s2b_raw].to(device).unsqueeze(0).expand(B, -1)
+        
+        if up_to_scale == 2 or M == 0:
+            torsions_default = torch.zeros((B, M, 2), device=device)
+            if M > 0:
+                torsions_default[:, :, 1] = 1.0
+            return ArticulatedPoseParams(translation=T_final, rotation_6d=r6d_hat, torsions_sc=torsions_default)
+            
+        is_bypass = (tokens.scale3_core_torsions == self.RIGID_BYPASS_TOKEN).all()
+        if is_bypass:
+            torsions = torch.zeros((B, M, 2), device=device)
+            torsions[:, :, 1] = 1.0
+            return ArticulatedPoseParams(translation=T_final, rotation_6d=r6d_hat, torsions_sc=torsions)
+            
+        depths = state.bond_tree_depths.to(device)
+        core_idx = torch.where(depths <= 2)[0]
+        fine_idx = torch.where(depths > 2)[0]
+        ordered_idx = torch.cat([core_idx, fine_idx])
+        
+        s3 = tokens.scale3_core_torsions[0]
+        s4 = tokens.scale4_fine_torsions[0]
+        
+        rec_thetas = torch.zeros(M, device=device)
+        for slot in range(min(4, len(ordered_idx))):
+            bm = ordered_idx[slot]
+            t3_val = s3[slot].item()
+            t3_raw = ((t3_val - slot * 13) * self.INV_1024) % self.k_tor
+            base_ang = (t3_raw / 1024.0) * 2.0 * np.pi - np.pi
+            if up_to_scale >= 4 and (slot + 4 >= len(ordered_idx)):
+                t4_val = s4[slot].item()
+                t4_raw = ((t4_val - slot * 17) * self.INV_1024) % self.k_tor
+                res_ang = ((t4_raw + 0.5) / 1024.0) * (2.0 * np.pi / 1024.0)
+                ang = base_ang + res_ang
+            else:
+                ang = base_ang
+            rec_thetas[bm] = ang
+            
+        # At Scale 4, also decode any remaining fine bonds (depth > 2)
+        if up_to_scale >= 4:
+            for slot in range(4, min(8, len(ordered_idx))):
+                bm = ordered_idx[slot]
+                s4_slot = slot - 4
+                t4_val = s4[s4_slot].item()
+                t4_raw = ((t4_val - s4_slot * 17) * self.INV_1024) % self.k_tor
+                ang = (t4_raw / 1024.0) * 2.0 * np.pi - np.pi
+                rec_thetas[bm] = ang
+                
+        thetas_t = rec_thetas.unsqueeze(0).expand(B, -1)
+        sc = torch.stack([torch.sin(thetas_t), torch.cos(thetas_t)], dim=-1)
+        return ArticulatedPoseParams(translation=T_final, rotation_6d=r6d_hat, torsions_sc=sc)
+
+    def decode_coords(
+        self,
+        tokens: DiscretePoseTokens,
+        state: CanonicalComplexState,
+        up_to_scale: int = 4
+    ) -> torch.Tensor:
+        params = self.decode_params(tokens, state, up_to_scale=up_to_scale)
+        M = state.rotatable_edges.shape[0]
+        coords = ForwardKinematics.apply(
+            ref_coords=state.ligand_ref_coords,
+            rotatable_edges=state.rotatable_edges,
+            kinematic_masks=state.kinematic_masks,
+            translation=params.translation,
+            rotation_6d=params.rotation_6d,
+            torsions_sc=params.torsions_sc if M > 0 else None
+        )
+        return coords
+
+    def forward_loss(
+        self,
+        state: CanonicalComplexState,
+        physics_loss_fn: Optional[nn.Module] = None
+    ) -> Dict[str, torch.Tensor]:
+        device = next(self.parameters()).device
+        tokens = self.encode(state)
+        c4 = self.decode_coords(tokens, state, up_to_scale=4)
+        c3 = self.decode_coords(tokens, state, up_to_scale=3)
+        c2 = self.decode_coords(tokens, state, up_to_scale=2)
+        
+        M = state.rotatable_edges.shape[0]
+        gt_coords = ForwardKinematics.apply(
+            ref_coords=state.ligand_ref_coords,
+            rotatable_edges=state.rotatable_edges,
+            kinematic_masks=state.kinematic_masks,
+            translation=state.gt_translation,
+            rotation_6d=state.gt_rotation_6d,
+            torsions_sc=state.gt_torsions_sc if M > 0 else None
+        )
+        gt_rigid = ForwardKinematics.apply(
+            ref_coords=state.ligand_ref_coords,
+            rotatable_edges=state.rotatable_edges,
+            kinematic_masks=state.kinematic_masks,
+            translation=state.gt_translation,
+            rotation_6d=state.gt_rotation_6d,
+            torsions_sc=None
+        )
+        
+        from ncm_dock.kinematics.symmetry_rmsd import symmetry_aware_squared_loss
+        loss_s4 = torch.mean(symmetry_aware_squared_loss(c4, gt_coords, state.automorphism_perms))
+        loss_s3 = torch.mean(symmetry_aware_squared_loss(c3, gt_coords, state.automorphism_perms))
+        loss_s2 = torch.mean(symmetry_aware_squared_loss(c2, gt_rigid, state.automorphism_perms))
+        
+        if physics_loss_fn is not None:
+            loss_fs = physics_loss_fn.compute_physics_loss(state, c4)
+        else:
+            loss_fs = torch.tensor(0.0, device=device)
+            
+        commit_total = torch.tensor(0.01, device=device)
+        total_loss = loss_s4 + 0.5 * loss_s3 + 0.25 * loss_s2 + 0.08 * loss_fs + 0.25 * commit_total
+        
+        return {
+            "loss": total_loss,
+            "loss_s4": loss_s4,
+            "loss_s3": loss_s3,
+            "loss_s2": loss_s2,
+            "loss_fs": loss_fs,
+            "commit_loss": commit_total
+        }
