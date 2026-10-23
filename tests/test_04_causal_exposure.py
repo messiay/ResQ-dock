@@ -94,6 +94,9 @@ def test_04_perturbation_recovery():
             opt_clean.step()
             
             # Train perturbed model (perturb=True: Scale-2 noise injected during teacher forcing)
+            # Conditioning on perturbed Scale-2 while predicting ground-truth Scale 3 & 4
+            # acts as a denoising autoencoder / exposure bias regularizer, ensuring that upstream
+            # rigid-body drift does not cause catastrophic rotamer hallucinations downstream.
             opt_pert.zero_grad()
             out_p = model_pert(state, tokens, perturb=True)
             loss_p = F.cross_entropy(out_p["logits_s3"][0], t_s3) + F.cross_entropy(out_p["logits_s4"][0], t_s4)

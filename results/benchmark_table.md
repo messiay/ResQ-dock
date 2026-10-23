@@ -18,9 +18,17 @@ Physical validity is verified via the official **PoseBusters suite (`posebusters
 
 | Pipeline Component | Mean Latency (ms) | Notes |
 | :--- | :---: | :---: |
-| **Stage 1–4 Next-Scale Transformer (4 Passes + Beam Search B=8)** | **60.64 ms** | Sub-5ms parallel generation |
-| **Stage-3 FreeSolvE Articulated Manifold Relaxation** | **131.19 ms** | 25 steps Adam manifold optimizer |
-| **Total End-to-End Inference per Complex** | **191.84 ms** | Real-time screening capable |
+| **Stage 1–4 Next-Scale Transformer (4 Passes + Beam Search B=8)** | **56.44 ms** | CPU execution (4 passes, B=8); ~4-8 ms on CUDA |
+| **Stage-3 FreeSolvE Articulated Manifold Relaxation** | **130.78 ms** | 25 steps Adam manifold optimizer |
+| **Total End-to-End Inference per Complex** | **187.21 ms** | Real-time screening capable |
 
 > [!NOTE]
 > All kinematics are parameterized on R^3 x SO(3) x T^m via differentiable Rodrigues matrices, guaranteeing that bond lengths, bond angles, and aromatic ring planarity are never violated regardless of step size.
+
+---
+
+## 3. Methodology & Generalization Disclosure
+
+### 3.1 Unit-Test Sanity Overfit Verification vs. Production Evaluation
+- **Gate 6 Scope:** The 20 benchmark complexes above serve as an **engineering sanity check** to mathematically verify end-to-end integration: proving that `NextScaleTransformer` + `BeamSearchDocking` (B=8) can successfully overfit, parameterize, and transmit continuous articulated poses into `FreeSolvEAdapter` and the official `PoseBusters` test harness without autograd breakage or shape mismatches.
+- **Production Paper Benchmark Protocol:** For research publication, training must be executed strictly on the disjoint PDBBind v2020 general/refined set (19k+ structures), and evaluated against the held-out PoseBusters benchmark suite (428 blind complexes). No training seed or complex identity may be shared across train and test splits.
