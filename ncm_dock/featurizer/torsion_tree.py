@@ -48,7 +48,12 @@ class KinematicTreeBuilder:
         
         # Ensure conformer exists
         if mol_heavy.GetNumConformers() == 0:
-            AllChem.EmbedMolecule(mol_heavy, randomSeed=42)
+            etkdg = AllChem.ETKDGv3()
+            etkdg.randomSeed = 42
+            etkdg.enforceChirality = True
+            res = AllChem.EmbedMolecule(mol_heavy, etkdg)
+            if res != 0:
+                AllChem.EmbedMolecule(mol_heavy, randomSeed=42, enforceChirality=True)
         conf = mol_heavy.GetConformer(conf_id)
         raw_coords = np.array([list(conf.GetAtomPosition(i)) for i in range(N)], dtype=np.float32)
         
@@ -89,13 +94,18 @@ class KinematicTreeBuilder:
         charges_t = torch.tensor(charges, dtype=torch.float32)
         vdw_t = torch.tensor(vdw, dtype=torch.float32)
         
-        # 1. Rotatable bonds matching SMARTS
+        # 1. Rotatable bonds matching SMARTS (excluding sp-hybridized endpoints to prevent collinear dihedrals)
         matches = mol_heavy.GetSubstructMatches(self.rot_smarts)
         rot_bonds = []
         seen_bonds = set()
         for u, v in matches:
             bond = mol_heavy.GetBondBetweenAtoms(u, v)
             if bond is not None and not bond.IsInRing():
+                atom_u = mol_heavy.GetAtomWithIdx(u)
+                atom_v = mol_heavy.GetAtomWithIdx(v)
+                # Exclude sp-hybridized atoms (e.g., alkynes, nitriles)
+                if atom_u.GetHybridization() == Chem.HybridizationType.SP or atom_v.GetHybridization() == Chem.HybridizationType.SP:
+                    continue
                 b_idx = tuple(sorted((u, v)))
                 if b_idx not in seen_bonds:
                     seen_bonds.add(b_idx)

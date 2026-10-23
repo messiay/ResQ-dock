@@ -208,9 +208,14 @@ class ComplexPrecomputer:
         if mol is None:
             return None
         mol = Chem.AddHs(mol)
-        success = AllChem.EmbedMolecule(mol, randomSeed=random_seed)
+        etkdg = AllChem.ETKDGv3()
+        etkdg.randomSeed = random_seed
+        etkdg.enforceChirality = True
+        success = AllChem.EmbedMolecule(mol, etkdg)
         if success != 0:
-            return None
+            success = AllChem.EmbedMolecule(mol, randomSeed=random_seed, enforceChirality=True)
+            if success != 0:
+                return None
         mol = Chem.RemoveHs(mol)
         
         lig_graph = self.tree_builder.build_kinematic_tree(mol)
@@ -304,13 +309,21 @@ class ComplexPrecomputer:
         )
 
 def save_complex_state(state: CanonicalComplexState, path: Union[Path, str]) -> None:
-    """Serializes CanonicalComplexState to .pt file on disk."""
+    """Serializes CanonicalComplexState to .pt binary tensor file on disk."""
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     torch.save(state, str(p))
 
-def load_complex_state(path: Union[Path, str]) -> CanonicalComplexState:
-    """Loads serialized CanonicalComplexState from disk."""
+def load_complex_state(path: Union[Path, str], mmap: bool = True) -> CanonicalComplexState:
+    """
+    Loads serialized CanonicalComplexState from disk.
+    If mmap=True, performs zero-copy memory-mapping bypassing PDB parsing I/O bottlenecks.
+    """
+    try:
+        if mmap:
+            return torch.load(str(path), weights_only=False, mmap=True)
+    except Exception:
+        pass
     return torch.load(str(path), weights_only=False)
 
 def complex_collate_fn(batch: List[CanonicalComplexState]) -> Dict[str, torch.Tensor]:

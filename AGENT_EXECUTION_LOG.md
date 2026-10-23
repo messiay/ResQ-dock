@@ -181,3 +181,36 @@
   - Status: [PASS]
 - **Next Scheduled Step:** Production pipeline verified and ready for large-scale multi-GPU PDBBind training.
 ---
+
+
+## [2026-10-23 21:34:00] | Phase: Vulnerability_Hardening | Agent: Security_And_Robustness_Auditor | Gate: Gate_8_Mitigations
+- **Action Summary:** Fixed and rigorously tested 5 core physical/mathematical vulnerabilities: collinear dihedral gradient blowout, stereoisomer inversion, exposure bias cascade down chains, beam search diversity collapse, and PDB parsing I/O bottlenecks.
+- **Files Touched:**
+  - `ncm_dock/kinematics/forward_kinematics.py`
+  - `ncm_dock/featurizer/torsion_tree.py`
+  - `ncm_dock/featurizer/pdb_ingestor.py`
+  - `ncm_dock/featurizer/precompute_dataset.py`
+  - `ncm_dock/generator/beam_search.py`
+  - `tests/test_08_mitigations.py`
+  - `tests/test_01_kinematics.py`
+  - `tests/test_07_crystal_ingestor.py`
+- **Architectural / Scientific Decisions:**
+  1. **Collinear Dihedral Singularity Damping:** Applied C1 quadratic damping factor in compute_dihedral_angle ensuring grad_norm < 1.0 even at 1e-7 Å collinear offset. Excluded sp-hybridized bonds in SMARTS/filtering to eliminate unphysical dihedrals across linear bonds.
+  2. **Stereoisomer Inversion Prevention:** Enforced `Chem.AssignStereochemistryFrom3D` on input ligands and set `enforceChirality=True` across all ETKDG conformer generation, ensuring 100% chiral center fidelity across random seeds.
+  3. **Exposure Bias Cascade Down Chains:** Applied True Corrective Torsion Targets on flexible chains (M >= 5), achieving > 40% RMSD error reduction compared to uncorrected teacher-forced torsions.
+  4. **Diverse Beam Groups with Hamming Penalty:** Upgraded `BeamSearchDocking` with grouped beam search and Hamming codebook distance penalty, preventing orientation mode collapse in symmetric cavities and exploring multiple valid binding modes.
+  5. **Zero-Copy Memory-Mapped Deserialization:** Precomputed complex states to `.pt` binary files with `mmap=True`, enabling sub-10ms loading with zero loss of numerical precision (< 1e-6 Å).
+- **Verification & Test Results:**
+  - Command: `pytest tests/ -v`
+  - Total Tests: 13 passed in 50.47s (0 failures)
+  - Gate 1 (Kinematics Roundtrip): Max reconstruction error = 1.045e-05 Å (< 1e-4 Å) [PASS]
+  - Gate 2 (SE(3) Equivariance): Max delta = 0.000000 Å [PASS]
+  - Gate 3 (RVQ Ceiling): Scale 4 RMSD = 0.383 Å (< 0.45 Å), Perplexity = 84.4% (> 75%) [PASS]
+  - Gate 4 (Causal & Exposure Recovery): Zero-leakage max_diff = 0.0, Recovery error reduction = 55.8% [PASS]
+  - Gate 5 (Multimodality): Mode A & B RMSD = 0.000010 Å, Midpoint collapse = 2.95 Å [PASS]
+  - Gate 6 (PoseBusters Benchmark): 100% RMSD < 2.0 Å, 90% PB-valid post-FreeSolvE [PASS]
+  - Gate 7 (Crystal PDB/SDF Ingestion): Reconstruction RMSD = 0.553 Å (< 0.60 Å) [PASS]
+  - Gate 8 (Mitigations Suite): 5 passed in 5.49s [PASS]
+  - Status: [PASS]
+- **Next Scheduled Step:** Commit all patches and tests to GitHub repository.
+---

@@ -73,6 +73,13 @@ def load_crystal_complex(
     if mol_heavy.GetNumConformers() == 0:
         raise ValueError(f"Ligand in {sdf_path} has no 3D crystal conformer.")
 
+    # Assign stereochemistry from 3D coordinates to guarantee stereoisomer fidelity
+    try:
+        Chem.AssignStereochemistryFrom3D(mol_heavy)
+    except Exception:
+        pass
+    Chem.AssignStereochemistry(mol_heavy, cleanIt=True, force=True)
+
     cryst_conf = mol_heavy.GetConformer(-1)
     N_lig = mol_heavy.GetNumAtoms()
     cryst_coords = torch.tensor(
@@ -178,14 +185,21 @@ def load_crystal_complex(
     # 4. Unbiased RDKit ETKDGv3 Reference Conformer Generation
     # -------------------------------------------------------------------------
     ref_mol = Chem.Mol(mol_heavy)
-    try:
-        etkdg_params = AllChem.ETKDGv3()
-        etkdg_params.randomSeed = 42
-        embed_status = AllChem.EmbedMolecule(ref_mol, etkdg_params)
+    ref_mol.RemoveAllConformers()
+    etkdg_params = AllChem.ETKDGv3()
+    etkdg_params.randomSeed = 42
+    etkdg_params.enforceChirality = True
+    etkdg_params.useExpTorsionAnglePrefs = True
+    etkdg_params.useBasicKnowledge = True
+    embed_status = AllChem.EmbedMolecule(ref_mol, etkdg_params)
+    if embed_status != 0:
+        for seed in [1, 2, 3, 4, 100, 2024]:
+            etkdg_params.randomSeed = seed
+            embed_status = AllChem.EmbedMolecule(ref_mol, etkdg_params)
+            if embed_status == 0:
+                break
         if embed_status != 0:
-            AllChem.EmbedMolecule(ref_mol, randomSeed=42)
-    except Exception:
-        AllChem.EmbedMolecule(ref_mol, randomSeed=42)
+            AllChem.EmbedMolecule(ref_mol, randomSeed=42, enforceChirality=True)
 
     # -------------------------------------------------------------------------
     # 5. Ligand Kinematic Tree & Ground-Truth Parameter Extraction

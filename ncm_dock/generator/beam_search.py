@@ -15,20 +15,27 @@ class BeamSearchDocking:
         self,
         transformer: NextScaleTransformer,
         tokenizer: FactoredKinematicRVQ,
-        beam_width: int = 8
+        beam_width: int = 8,
+        diversity_penalty: float = 0.0,
+        num_groups: int = 1
     ):
         self.transformer = transformer
         self.tokenizer = tokenizer
         self.beam_width = beam_width
+        self.diversity_penalty = diversity_penalty
+        self.num_groups = num_groups
 
     @torch.no_grad()
     def search(
         self,
         state: CanonicalComplexState,
-        device: Optional[torch.device] = None
+        device: Optional[torch.device] = None,
+        diversity_penalty: Optional[float] = None,
+        num_groups: Optional[int] = None
     ) -> Tuple[torch.Tensor, DiscretePoseTokens, ArticulatedPoseParams, torch.Tensor]:
         """
         Executes exact log-likelihood beam search across all 4 scales.
+        Supports diverse beam groups with Hamming codebook penalty to prevent mode collapse.
         Returns:
         - coords: [B, N_lig, 3] decoded 3D coordinates for top-B beams
         - tokens: DiscretePoseTokens with B beams
@@ -37,6 +44,9 @@ class BeamSearchDocking:
         """
         if device is None:
             device = next(self.transformer.parameters()).device
+
+        div_penalty = self.diversity_penalty if diversity_penalty is None else diversity_penalty
+        groups = self.num_groups if num_groups is None else num_groups
 
         self.transformer.eval()
         self.tokenizer.eval()
@@ -58,7 +68,7 @@ class BeamSearchDocking:
         _, logits_pass1 = self.transformer.forward_from_embeddings(seq_pass1, ctx_emb)
         log_p_s1 = F.log_softmax(logits_pass1["logits_s1"][0], dim=-1) # [512]
         
-        topk_s1_logp, topk_s1_idx = torch.topk(log_p_s1, k=min(B_w, len(log_p_s1)))
+        topk_s1_logp, topk_s1_idx = torch.topk(log_p_s1, k=min(max(B_w, 8), len(log_p_s1)))
         actual_B = len(topk_s1_idx)
 
         # -------------------------------------------------------------------------
@@ -79,15 +89,16 @@ class BeamSearchDocking:
 
         # Joint top candidate pairs for (s2a, s2b) per beam
         beam_candidates = []
+        k_cand = 8 if div_penalty > 0.0 or groups > 1 else 4
         for b in range(actual_B):
             base_logp = topk_s1_logp[b].item()
             s1_val = topk_s1_idx[b].item()
             
-            top_s2a_logp, top_s2a_idx = torch.topk(log_p_s2a[b], k=4)
-            top_s2b_logp, top_s2b_idx = torch.topk(log_p_s2b[b], k=4)
+            top_s2a_logp, top_s2a_idx = torch.topk(log_p_s2a[b], k=min(k_cand, log_p_s2a[b].shape[-1]))
+            top_s2b_logp, top_s2b_idx = torch.topk(log_p_s2b[b], k=min(k_cand, log_p_s2b[b].shape[-1]))
             
-            for i in range(4):
-                for j in range(4):
+            for i in range(len(top_s2a_idx)):
+                for j in range(len(top_s2b_idx)):
                     cum_logp = base_logp + top_s2a_logp[i].item() + top_s2b_logp[j].item()
                     beam_candidates.append({
                         "cum_logp": cum_logp,
@@ -96,8 +107,51 @@ class BeamSearchDocking:
                         "s2b": top_s2b_idx[j].item()
                     })
 
-        beam_candidates.sort(key=lambda x: x["cum_logp"], reverse=True)
-        top_beams_s2 = beam_candidates[:B_w]
+        # Selection with Diversity Penalty & Beam Groups
+        if div_penalty > 0.0 or groups > 1:
+            def hamming_sim(cand, prior):
+                sim = 0.0
+                if cand["s1"] == prior["s1"]:
+                    sim += 1.0
+                if cand["s2a"] == prior["s2a"]:
+                    sim += 1.0
+                if cand["s2b"] == prior["s2b"]:
+                    sim += 2.0 # Higher weight on orientation token
+                return sim
+
+            selected_beams = []
+            num_g = max(1, groups)
+            beams_per_group = max(1, B_w // num_g)
+            
+            # Pool of candidates sorted by initial logp
+            cand_pool = sorted(beam_candidates, key=lambda x: x["cum_logp"], reverse=True)
+            
+            for g in range(num_g):
+                needed = beams_per_group if g < num_g - 1 else (B_w - len(selected_beams))
+                if needed <= 0:
+                    break
+                group_selected = []
+                # Score candidates penalizing similarity to already selected beams
+                for _ in range(needed):
+                    best_cand = None
+                    best_score = -float('inf')
+                    best_idx = -1
+                    for idx, c in enumerate(cand_pool):
+                        penalty = sum(hamming_sim(c, b) for b in selected_beams + group_selected)
+                        score = c["cum_logp"] - div_penalty * penalty
+                        if score > best_score:
+                            best_score = score
+                            best_cand = c
+                            best_idx = idx
+                    if best_cand is not None:
+                        group_selected.append(best_cand)
+                        cand_pool.pop(best_idx)
+                selected_beams.extend(group_selected)
+            top_beams_s2 = selected_beams[:B_w]
+        else:
+            beam_candidates.sort(key=lambda x: x["cum_logp"], reverse=True)
+            top_beams_s2 = beam_candidates[:B_w]
+
         actual_B = len(top_beams_s2)
 
         s1_t = torch.tensor([[b["s1"]] for b in top_beams_s2], dtype=torch.long, device=device)
