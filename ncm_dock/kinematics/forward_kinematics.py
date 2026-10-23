@@ -210,3 +210,127 @@ class ForwardKinematics:
         X_final = X_rotated + translation.unsqueeze(1)
         
         return X_final
+
+def compute_dihedral_angle(p1: torch.Tensor, p2: torch.Tensor, p3: torch.Tensor, p4: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
+    """Computes IUPAC dihedral angle for 4 points p1-p2-p3-p4."""
+    b1 = p2 - p1
+    b2 = p3 - p2
+    b3 = p4 - p3
+    b2_len = torch.norm(b2, dim=-1, keepdim=True) + eps
+    b2_u = b2 / b2_len
+    n1 = torch.linalg.cross(b1, b2, dim=-1)
+    n2 = torch.linalg.cross(b2, b3, dim=-1)
+    m1 = torch.linalg.cross(n1, b2_u, dim=-1)
+    x = torch.sum(n1 * n2, dim=-1)
+    y = torch.sum(m1 * n2, dim=-1)
+    return torch.atan2(y, x)
+
+def kabsch_rotation_matrix(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
+    """
+    Finds optimal SO(3) rotation matrix R aligning centered P to Q (P @ R^T ~= Q).
+    P, Q: [N, 3] centered
+    """
+    H = torch.mm(P.transpose(-1, -2), Q)
+    U, S, Vh = torch.linalg.svd(H)
+    V = Vh.mH
+    R = torch.mm(V, U.transpose(-1, -2))
+    if torch.linalg.det(R) < 0:
+        V[:, -1] *= -1.0
+        R = torch.mm(V, U.transpose(-1, -2))
+    return R
+
+def extract_kinematic_params(
+    ref_coords: torch.Tensor,
+    target_coords: torch.Tensor,
+    rotatable_edges: torch.Tensor,
+    kinematic_masks: torch.Tensor,
+    eps: float = 1e-8
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Inverse kinematic parameter extractor mapping (ref_coords, target_coords) -> (T, r6d, torsions_sc).
+    Uses Kabsch alignment on the root rigid fragment (or internal conformer) and dihedral angle extraction.
+    ref_coords: [N, 3]
+    target_coords: [N, 3]
+    rotatable_edges: [M, 2]
+    kinematic_masks: [M, N]
+    Returns:
+        translation: [3]
+        rotation_6d: [6]
+        torsions_sc: [M, 2]
+    """
+    device = target_coords.device
+    dtype = target_coords.dtype
+    
+    ref = ref_coords.to(device=device, dtype=dtype)
+    target = target_coords.to(device=device, dtype=dtype)
+    N = ref.shape[0]
+    M = rotatable_edges.shape[0]
+    
+    # 1. Extract rotatable bond torsions via dihedral angle delta
+    if M > 0:
+        extracted_thetas = []
+        for m in range(M):
+            u = int(rotatable_edges[m, 0].item())
+            v = int(rotatable_edges[m, 1].item())
+            mask_m = kinematic_masks[m].to(device=device, dtype=torch.bool)
+            
+            # Find an upstream neighbor of u (not in mask_m, distance ~ covalent)
+            u_nbrs = [
+                i for i in range(N)
+                if i != u and i != v and not bool(mask_m[i].item()) and float(torch.norm(ref[i] - ref[u]).item()) < 2.0
+            ]
+            if len(u_nbrs) == 0:
+                # Fallback to any non-downstream atom
+                u_nbrs = [i for i in range(N) if i != u and i != v and not bool(mask_m[i].item())]
+                
+            # Find a downstream neighbor of v (in mask_m, distance ~ covalent)
+            v_nbrs = [
+                i for i in range(N)
+                if i != u and i != v and bool(mask_m[i].item()) and float(torch.norm(ref[i] - ref[v]).item()) < 2.0
+            ]
+            if len(v_nbrs) == 0:
+                # Fallback to any downstream atom
+                v_nbrs = [i for i in range(N) if i != u and i != v and bool(mask_m[i].item())]
+                
+            if len(u_nbrs) > 0 and len(v_nbrs) > 0:
+                a = u_nbrs[0]
+                b = v_nbrs[0]
+                phi_ref = compute_dihedral_angle(ref[a], ref[u], ref[v], ref[b])
+                phi_tgt = compute_dihedral_angle(target[a], target[u], target[v], target[b])
+                # Rodrigues rotation in ForwardKinematics is R_tor(-theta) on vectors
+                d_theta = -(phi_tgt - phi_ref)
+                d_theta = torch.atan2(torch.sin(d_theta), torch.cos(d_theta))
+            else:
+                d_theta = torch.tensor(0.0, device=device, dtype=dtype)
+            extracted_thetas.append(d_theta)
+            
+        thetas_t = torch.stack(extracted_thetas, dim=0)
+        torsions_sc = torch.stack([torch.sin(thetas_t), torch.cos(thetas_t)], dim=-1)
+    else:
+        torsions_sc = torch.zeros((0, 2), device=device, dtype=dtype)
+        
+    # 2. ForwardKinematics with extracted torsions (unrotated, unshifted) to build reference internal state
+    identity_r6d = torch.tensor([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], device=device, dtype=dtype)
+    zero_T = torch.zeros(3, device=device, dtype=dtype)
+    
+    X_internal = ForwardKinematics.apply(
+        ref_coords=ref,
+        rotatable_edges=rotatable_edges,
+        kinematic_masks=kinematic_masks,
+        translation=zero_T,
+        rotation_6d=identity_r6d,
+        torsions_sc=torsions_sc
+    ).squeeze(0)
+    
+    # 3. Extract translation as heavy-atom centroid of target_coords
+    translation = torch.mean(target, dim=0)
+    
+    # 4. Extract rotation via Kabsch alignment between centered X_internal and centered target
+    P_centered = X_internal - torch.mean(X_internal, dim=0, keepdim=True)
+    Q_centered = target - translation.unsqueeze(0)
+    
+    R_rigid = kabsch_rotation_matrix(P_centered, Q_centered)
+    rotation_6d = matrix_to_rotation_6d(R_rigid.unsqueeze(0)).squeeze(0)
+    
+    return translation, rotation_6d, torsions_sc
+

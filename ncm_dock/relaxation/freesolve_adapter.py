@@ -85,10 +85,14 @@ class FreeSolvEAdapter(BaseRelaxer):
         k_sq = Kx**2 + Ky**2 + Kz**2
         k_sq[0, 0, 0] = 1.0 # Avoid div by zero at k=0
         
-        # Effective dielectric screening: eps_eff
-        eps_eff = self.epsilon_in
-        # Poisson equation in Fourier space: -k^2 Phi(k) = -4*pi / eps * rho(k) -> Phi(k) = 4*pi*rho(k) / (eps * k^2)
-        G_k = (4.0 * np.pi) / (eps_eff * k_sq)
+        # Distance-dependent screened electrostatic potential:
+        # epsilon(k) smoothly transitions from epsilon_in = 4.0 (pocket contact / high k)
+        # to epsilon_water = 78.5 (bulk solvent exterior / low k -> 0)
+        k_screen = 0.3 # Screening frequency corresponding to ~3.3 Å Debye length
+        eps_k = self.epsilon_water - (self.epsilon_water - self.epsilon_in) * (k_sq / (k_sq + k_screen**2))
+        
+        # Poisson Green's kernel in Fourier space: Phi(k) = 4*pi*rho(k) / (eps(k) * k^2)
+        G_k = (4.0 * np.pi) / (eps_k * k_sq)
         G_k[0, 0, 0] = 0.0 # Neutral background at k=0
         
         # 3D FFT convolution

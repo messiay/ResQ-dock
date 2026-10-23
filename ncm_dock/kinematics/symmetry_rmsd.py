@@ -1,5 +1,6 @@
 import torch
-from typing import Optional
+import numpy as np
+from typing import Optional, Union
 
 def symmetry_aware_squared_loss(
     pred_coords: torch.Tensor,       # [B, N, 3] or [N, 3]
@@ -49,3 +50,51 @@ def symmetry_aware_rmsd(
     """Computes symmetry-aware heavy-atom RMSD: sqrt(min_mse) in Angstroms."""
     min_mse = symmetry_aware_squared_loss(pred_coords, target_coords, automorphism_perms)
     return torch.sqrt(torch.clamp(min_mse, min=eps))
+
+def compute_spyrmsd(
+    pred_coords: torch.Tensor | np.ndarray,
+    target_coords: torch.Tensor | np.ndarray,
+    mol_or_atomicnums,
+    adj_matrix: Optional[np.ndarray] = None
+) -> float:
+    """
+    Computes graph-automorphism-corrected RMSD using the official spyrmsd library.
+    Prevents artificial inflation of RMSD on symmetric rings (benzene, carboxylate, guanidinium).
+    """
+    import numpy as np
+    import spyrmsd
+    from spyrmsd import rmsd, molecule
+
+    if isinstance(pred_coords, torch.Tensor):
+        c_pred = pred_coords.detach().cpu().numpy().squeeze()
+    else:
+        c_pred = np.asarray(pred_coords)
+        
+    if isinstance(target_coords, torch.Tensor):
+        c_target = target_coords.detach().cpu().numpy().squeeze()
+    else:
+        c_target = np.asarray(target_coords)
+
+    if hasattr(mol_or_atomicnums, "GetAtoms"):
+        # RDKit Mol
+        spy_mol = molecule.Molecule.from_rdkit(mol_or_atomicnums)
+        atomicnums = spy_mol.atomicnums
+        adj = spy_mol.adjacency_matrix
+    else:
+        atomicnums = np.asarray(mol_or_atomicnums)
+        adj = adj_matrix if adj_matrix is not None else np.ones((len(atomicnums), len(atomicnums)))
+
+    val = rmsd.symmrmsd(
+        c_target,
+        c_pred,
+        atomicnums,
+        atomicnums,
+        adj,
+        adj,
+        center=False,
+        minimize=False
+    )
+    if isinstance(val, (list, np.ndarray)):
+        return float(val[0])
+    return float(val)
+

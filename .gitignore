@@ -25,3 +25,6 @@ tmp/
 .vscode/
 .idea/
 *.swp
+*.egg-info/
+build/
+dist/

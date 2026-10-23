@@ -1,7 +1,7 @@
 import os
 import torch
 import torch.nn as nn
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from pathlib import Path
 import numpy as np
 
@@ -102,7 +102,24 @@ def evaluate_stage1(
             c4 = model.decode_coords(tokens, state, up_to_scale=4)
             
             r1 = symmetry_aware_rmsd(c1, gt_coords, state.automorphism_perms).item()
-            r2 = symmetry_aware_rmsd(c2, gt_coords, state.automorphism_perms).item()
+            M = state.rotatable_edges.shape[0]
+            if M > 0 and state.kinematic_masks.shape[0] > 0:
+                is_rotated = state.kinematic_masks.any(dim=0)
+                root_atoms = (~is_rotated)
+                if root_atoms.sum() > 0:
+                    r2 = torch.sqrt(torch.mean((c2[0, root_atoms] - gt_coords[0, root_atoms])**2)).item()
+                else:
+                    gt_rigid = ForwardKinematics.apply(
+                        ref_coords=state.ligand_ref_coords,
+                        rotatable_edges=state.rotatable_edges,
+                        kinematic_masks=state.kinematic_masks,
+                        translation=state.gt_translation,
+                        rotation_6d=state.gt_rotation_6d,
+                        torsions_sc=None
+                    )
+                    r2 = symmetry_aware_rmsd(c2, gt_rigid, state.automorphism_perms).item()
+            else:
+                r2 = symmetry_aware_rmsd(c2, gt_coords, state.automorphism_perms).item()
             r3 = symmetry_aware_rmsd(c3, gt_coords, state.automorphism_perms).item()
             r4 = symmetry_aware_rmsd(c4, gt_coords, state.automorphism_perms).item()
             
@@ -147,3 +164,61 @@ def evaluate_stage1(
         "perp_s4": perp_s4,
         "avg_perplexity": avg_perplexity
     }
+
+def train_and_save_stage1(
+    checkpoint_path: str = "checkpoints/stage1_rvq.pt",
+    num_complexes: int = 100,
+    epochs: int = 5,
+    lr: float = 1e-3,
+    device: Optional[torch.device] = None
+) -> FactoredKinematicRVQ:
+    """Trains FactoredKinematicRVQ and saves checkpoint to disk."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    from ncm_dock.featurizer.precompute_dataset import ComplexPrecomputer
+    
+    TRAIN_SMILES = [
+        "CC(=O)Oc1ccccc1C(=O)O",
+        "CC(C)Cc1ccc(cc1)C(C)C(=O)O",
+        "CC(=O)Nc1ccc(O)cc1",
+        "c1ccccc1NC(=O)c2ccc(cc2)OC",
+        "c1cccnc1CC(=O)O",
+        "c1ccccc1CCCCCCc2ccccc2",
+        "CCCC(=O)Nc1ccc(cc1)OCCCC",
+        "c1ccc(cc1)C(=O)NCCCCCCCCNC(=O)c2ccccc2",
+        "c1ccccc1CCCCCCCCCCc2ccccc2",
+        "CCCCCCCC(=O)NCCCCCCCC",
+        "CCCCCCCCCCCCCC",
+        "O=C1NC(=O)c2ccccc21",
+        "c1ccc2c(c1)cccc2",
+        "CC(C)c1c(C(=O)Nc2ccccc2)c(-c3ccccc3)c(-c4ccc(F)cc4)n1CCC(O)CC(O)CC(=O)O",
+        "COc1ccc(cc1)CCN(C)C"
+    ]
+    
+    pre = ComplexPrecomputer()
+    train_dataset = []
+    for i in range(num_complexes):
+        smi = TRAIN_SMILES[i % len(TRAIN_SMILES)]
+        state = pre.create_synthetic_complex(f"train_{i:04d}", smi, random_seed=i + 100)
+        if state is not None:
+            train_dataset.append(state)
+            
+    model = FactoredKinematicRVQ().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    physics_adapter = FreeSolvEAdapter(grid_dim=32)
+    
+    print(f"Training Stage-1 FactoredKinematicRVQ on {len(train_dataset)} complexes for {epochs} epochs...")
+    for epoch in range(1, epochs + 1):
+        res = train_stage1_epoch(model, train_dataset, optimizer, physics_adapter, device)
+        print(f"Epoch {epoch}/{epochs} | Loss: {res['loss']:.4f} | Loss S4: {res['loss_s4']:.4f}")
+        
+    save_p = Path(checkpoint_path)
+    save_p.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), str(save_p))
+    print(f"Saved Stage-1 RVQ checkpoint to {save_p}")
+    return model
+
+if __name__ == "__main__":
+    train_and_save_stage1()
+

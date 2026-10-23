@@ -103,8 +103,8 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
     def _init_structured_codebooks(self):
         """Initializes codebooks with uniform spatial and SO(3) coverings."""
         with torch.no_grad():
-            # S1: 8x8x8 = 512 grid in [-3.5, 3.5]^3
-            lin1 = torch.linspace(-3.5, 3.5, 8)
+            # S1: 8x8x8 = 512 grid in [-3.0, 3.0]^3 (exact bin centers)
+            lin1 = torch.linspace(-3.0 + 0.375, 3.0 - 0.375, 8)
             gx, gy, gz = torch.meshgrid(lin1, lin1, lin1, indexing='ij')
             self._grid_s1 = torch.stack([gx, gy, gz], dim=-1).reshape(512, 3)
             embed_s1 = torch.zeros(1, 512, self.dim_s1)
@@ -116,8 +116,8 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             self.s1_dec.weight.zero_()
             self.s1_dec.weight[:3, :3] = torch.eye(3)
             
-            # S2a: 8x8x8 = 512 grid in [-0.5, 0.5]^3
-            lin2 = torch.linspace(-0.5, 0.5, 8)
+            # S2a: 8x8x8 = 512 grid in [-0.375, 0.375]^3 (exact residual bin centers)
+            lin2 = torch.linspace(-0.375 + 0.375/8.0, 0.375 - 0.375/8.0, 8)
             gx2, gy2, gz2 = torch.meshgrid(lin2, lin2, lin2, indexing='ij')
             self._grid_s2a = torch.stack([gx2, gy2, gz2], dim=-1).reshape(512, 3)
             embed_s2a = torch.zeros(1, 512, self.dim_s2a)
@@ -129,21 +129,17 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             self.s2a_dec.weight.zero_()
             self.s2a_dec.weight[:3, :3] = torch.eye(3)
             
-            # S2b: 1024 SO(3) rotation matrices in canonical pocket frame cone
-            N_rot = 1024
-            gold = (5.0**0.5 - 1.0) / 2.0
-            idx = torch.arange(N_rot, dtype=torch.float32)
-            u1 = torch.remainder(idx * gold, 1.0)
-            u2 = torch.remainder(idx * gold * 1.618, 1.0)
-            u3 = torch.remainder(idx * gold * 2.618, 1.0)
+            # S2b: 1024 SO(3) rotation matrices via Fibonacci sphere directions x 16 cone angles
+            N_dirs = 64
+            i_dirs = torch.arange(N_dirs, dtype=torch.float32)
+            phi_f = (1.0 + 5.0**0.5) / 2.0
+            theta_f = 2.0 * np.pi * i_dirs / phi_f
+            z_f = 1.0 - 2.0 * (i_dirs + 0.5) / N_dirs
+            r_f = torch.sqrt(torch.clamp(1.0 - z_f*z_f, min=0.0))
+            dirs = torch.stack([r_f * torch.cos(theta_f), r_f * torch.sin(theta_f), z_f], dim=-1)
             
-            axes = torch.stack([
-                torch.sin(2.0 * np.pi * u1) * torch.cos(2.0 * np.pi * u2),
-                torch.sin(2.0 * np.pi * u1) * torch.sin(2.0 * np.pi * u2),
-                torch.cos(2.0 * np.pi * u1)
-            ], dim=-1)
-            axes = axes / torch.norm(axes, dim=-1, keepdim=True)
-            omegas = axes * (u3.unsqueeze(-1) * 0.46)
+            angles = torch.linspace(0.05, 0.80, 16)
+            omegas = (dirs.unsqueeze(1) * angles.unsqueeze(0).unsqueeze(-1)).reshape(1024, 3)
             rot_mats = axis_angle_to_matrix(omegas)
             self._r6d_anchors = matrix_to_rotation_6d(rot_mats)
             
@@ -157,8 +153,8 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             self.s2b_dec.weight[:6, :6] = torch.eye(6)
             
             # S3 & S4: 1024 torsion anchors on circle/torus
-            angles = torch.linspace(-np.pi, np.pi, 1024)
-            sc_anchors = torch.stack([torch.sin(angles), torch.cos(angles)], dim=-1)
+            angles_tor = torch.linspace(-np.pi, np.pi, 1024)
+            sc_anchors = torch.stack([torch.sin(angles_tor), torch.cos(angles_tor)], dim=-1)
             embed_tor = torch.zeros(1, 1024, self.dim_tor)
             embed_tor[0, :, :2] = sc_anchors
             for level in range(2):
@@ -172,20 +168,20 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
         T = state.gt_translation.to(device)
         r6d = state.gt_rotation_6d.to(device)
         
-        # Scale 1: Coarse Translation
-        ix = torch.clamp(((T[0] + 3.5) / 7.0 * 8.0).long(), 0, 7)
-        iy = torch.clamp(((T[1] + 3.5) / 7.0 * 8.0).long(), 0, 7)
-        iz = torch.clamp(((T[2] + 3.5) / 7.0 * 8.0).long(), 0, 7)
+        # Scale 1: Coarse Translation (8 uniform bins spanning [-3.0, 3.0])
+        ix = torch.clamp(((T[0] + 3.0) / 6.0 * 8.0).long(), 0, 7)
+        iy = torch.clamp(((T[1] + 3.0) / 6.0 * 8.0).long(), 0, 7)
+        iz = torch.clamp(((T[2] + 3.0) / 6.0 * 8.0).long(), 0, 7)
         s1_raw = (ix * 64 + iy * 8 + iz).item()
         s1_val = (s1_raw * self.PERM_512) % self.k_s1
         s1_idx = torch.tensor([[s1_val]], dtype=torch.long, device=device)
         T_hat1 = self._grid_s1[s1_raw].to(device)
         
-        # Scale 2: Residual Translation & Orientation
+        # Scale 2: Residual Translation & Orientation (8 uniform bins spanning [-0.375, 0.375])
         delta_T = T - T_hat1
-        dx = torch.clamp(((delta_T[0] + 0.5) / 1.0 * 8.0).long(), 0, 7)
-        dy = torch.clamp(((delta_T[1] + 0.5) / 1.0 * 8.0).long(), 0, 7)
-        dz = torch.clamp(((delta_T[2] + 0.5) / 1.0 * 8.0).long(), 0, 7)
+        dx = torch.clamp(((delta_T[0] + 0.375) / 0.75 * 8.0).long(), 0, 7)
+        dy = torch.clamp(((delta_T[1] + 0.375) / 0.75 * 8.0).long(), 0, 7)
+        dz = torch.clamp(((delta_T[2] + 0.375) / 0.75 * 8.0).long(), 0, 7)
         s2a_raw = (dx * 64 + dy * 8 + dz).item()
         s2a_val = (s2a_raw * self.PERM_512) % self.k_s2a
         s2a_idx = torch.tensor([[s2a_val]], dtype=torch.long, device=device)
@@ -211,35 +207,79 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             
             s3_list = []
             s4_list = []
-            for slot in range(4):
-                if slot < len(ordered_idx):
-                    bm3 = ordered_idx[slot]
-                    ang3 = thetas[bm3].item()
-                    norm3 = (ang3 + np.pi) / (2.0 * np.pi)
-                    t3_raw = int(np.clip(int(norm3 * 1024), 0, 1023))
-                else:
-                    t3_raw = (s1_val * 313 + s2a_val * 419 + s2b_val * 521 + slot * 197 + 37) % self.k_tor
-                t3_val = (t3_raw * self.PERM_1024 + slot * 13) % self.k_tor
-                s3_list.append(t3_val)
-                
-                # S4
-                if slot + 4 < len(ordered_idx):
-                    bm4 = ordered_idx[slot + 4]
-                    ang4 = thetas[bm4].item()
-                    norm4 = (ang4 + np.pi) / (2.0 * np.pi)
-                    t4_raw = int(np.clip(int(norm4 * 1024), 0, 1023))
-                elif slot < len(ordered_idx):
-                    bm4 = ordered_idx[slot]
-                    ang4 = thetas[bm4].item()
-                    norm3_ref = (ang4 + np.pi) / (2.0 * np.pi)
-                    t3_base = int(np.clip(int(norm3_ref * 1024), 0, 1023))
-                    frac = (norm3_ref * 1024.0) - t3_base
-                    t4_raw = int(np.clip(int(frac * 1024.0), 0, 1023))
-                else:
-                    t4_raw = (s1_val * 487 + s2a_val * 613 + s2b_val * 739 + slot * 251 + 79) % self.k_tor
+            
+            if len(ordered_idx) <= 4:
+                for slot in range(4):
+                    if slot < len(ordered_idx):
+                        bm = ordered_idx[slot]
+                        ang = thetas[bm].item()
+                        norm = (ang + np.pi) / (2.0 * np.pi)
+                        t3_raw = int(np.clip(int(norm * 1024), 0, 1023))
+                        frac = (norm * 1024.0) - t3_raw
+                        t4_raw = int(np.clip(int(frac * 1024.0), 0, 1023))
+                    else:
+                        t3_raw = (s1_val * 313 + s2a_val * 419 + slot * 197 + 37) % self.k_tor
+                        t4_raw = (s1_val * 487 + s2b_val * 613 + slot * 251 + 79) % self.k_tor
+                    s3_list.append((t3_raw * self.PERM_1024 + slot * 13) % self.k_tor)
+                    s4_list.append((t4_raw * self.PERM_1024 + slot * 17) % self.k_tor)
+            elif len(ordered_idx) <= 8:
+                for slot in range(4):
+                    b1 = slot * 2
+                    b2 = slot * 2 + 1
+                    if b1 < len(ordered_idx):
+                        n1 = (thetas[ordered_idx[b1]].item() + np.pi) / (2.0 * np.pi)
+                        bin1 = int(np.clip(int(n1 * 32), 0, 31))
+                        res1 = int(np.clip(int(((n1 * 32) - bin1) * 32), 0, 31))
+                    else:
+                        bin1 = (s1_val * 17 + slot) % 32
+                        res1 = (s2a_val * 19 + slot) % 32
+                    if b2 < len(ordered_idx):
+                        n2 = (thetas[ordered_idx[b2]].item() + np.pi) / (2.0 * np.pi)
+                        bin2 = int(np.clip(int(n2 * 32), 0, 31))
+                        res2 = int(np.clip(int(((n2 * 32) - bin2) * 32), 0, 31))
+                    else:
+                        bin2 = (s2a_val * 23 + slot) % 32
+                        res2 = (s2b_val * 29 + slot) % 32
+                    t3_raw = bin1 * 32 + bin2
+                    t4_raw = res1 * 32 + res2
+                    s3_list.append((t3_raw * self.PERM_1024 + slot * 13) % self.k_tor)
+                    s4_list.append((t4_raw * self.PERM_1024 + slot * 17) % self.k_tor)
+            else: # len(ordered_idx) > 8
+                for slot in range(4):
+                    b0 = slot
+                    b1 = 4 + slot
+                    b2 = 8 + slot
+                    b3 = 12 + slot
                     
-                t4_val = (t4_raw * self.PERM_1024 + slot * 17) % self.k_tor
-                s4_list.append(t4_val)
+                    if b0 < len(ordered_idx):
+                        n0 = (thetas[ordered_idx[b0]].item() + np.pi) / (2.0 * np.pi)
+                        bin0 = int(np.clip(int(n0 * 16), 0, 15))
+                        res0 = int(np.clip(int(((n0 * 16) - bin0) * 16), 0, 15))
+                    else:
+                        bin0 = (s1_val * 17 + slot) % 16
+                        res0 = (s2a_val * 19 + slot) % 16
+                    if b1 < len(ordered_idx):
+                        n1 = (thetas[ordered_idx[b1]].item() + np.pi) / (2.0 * np.pi)
+                        bin1 = int(np.clip(int(n1 * 8), 0, 7))
+                        res1 = int(np.clip(int(((n1 * 8) - bin1) * 8), 0, 7))
+                    else:
+                        bin1 = (s2a_val * 23 + slot) % 8
+                        res1 = (s2b_val * 29 + slot) % 8
+                    if b2 < len(ordered_idx):
+                        n2 = (thetas[ordered_idx[b2]].item() + np.pi) / (2.0 * np.pi)
+                        bin2 = int(np.clip(int(n2 * 8), 0, 7))
+                    else:
+                        bin2 = (s1_val * 31 + slot) % 8
+                    if b3 < len(ordered_idx):
+                        n3 = (thetas[ordered_idx[b3]].item() + np.pi) / (2.0 * np.pi)
+                        bin3 = int(np.clip(int(n3 * 8), 0, 7))
+                    else:
+                        bin3 = (s2b_val * 37 + slot) % 8
+                        
+                    t3_raw = bin0 * 64 + bin1 * 8 + bin2
+                    t4_raw = res0 * 64 + res1 * 8 + bin3
+                    s3_list.append((t3_raw * self.PERM_1024 + slot * 13) % self.k_tor)
+                    s4_list.append((t4_raw * self.PERM_1024 + slot * 17) % self.k_tor)
                 
             s3_tokens = torch.tensor([s3_list], dtype=torch.long, device=device)
             s4_tokens = torch.tensor([s4_list], dtype=torch.long, device=device)
@@ -264,7 +304,8 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
         # Scale 1: Invert permutation to recover exact 3D grid coordinate
         s1_val = tokens.scale1_anchor.item()
         s1_raw = (s1_val * self.INV_512) % self.k_s1
-        T_hat1 = self._grid_s1[s1_raw].to(device).unsqueeze(0).expand(B, -1)
+        s1_embed = self.s1_vq._codebook.embed[0, s1_raw:s1_raw+1].to(device)
+        T_hat1 = self.s1_dec(s1_embed).expand(B, -1)
         
         if up_to_scale == 1:
             r6d_default = torch.tensor([1., 0., 0., 0., 1., 0.], device=device).unsqueeze(0).expand(B, -1)
@@ -279,9 +320,12 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
         s2a_raw = (s2a_val * self.INV_512) % self.k_s2a
         s2b_raw = (s2b_val * self.INV_1024) % self.k_s2b
         
-        delta_T_hat = self._grid_s2a[s2a_raw].to(device).unsqueeze(0).expand(B, -1)
+        s2a_embed = self.s2a_vq._codebook.embed[0, s2a_raw:s2a_raw+1].to(device)
+        delta_T_hat = self.s2a_dec(s2a_embed).expand(B, -1)
         T_final = T_hat1 + delta_T_hat
-        r6d_hat = self._r6d_anchors[s2b_raw].to(device).unsqueeze(0).expand(B, -1)
+        
+        s2b_embed = self.s2b_vq._codebook.embed[0, s2b_raw:s2b_raw+1].to(device)
+        r6d_hat = self.s2b_dec(s2b_embed).expand(B, -1)
         
         if up_to_scale == 2 or M == 0:
             torsions_default = torch.zeros((B, M, 2), device=device)
@@ -304,29 +348,75 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
         s4 = tokens.scale4_fine_torsions[0]
         
         rec_thetas = torch.zeros(M, device=device)
-        for slot in range(min(4, len(ordered_idx))):
-            bm = ordered_idx[slot]
-            t3_val = s3[slot].item()
-            t3_raw = ((t3_val - slot * 13) * self.INV_1024) % self.k_tor
-            base_ang = (t3_raw / 1024.0) * 2.0 * np.pi - np.pi
-            if up_to_scale >= 4 and (slot + 4 >= len(ordered_idx)):
-                t4_val = s4[slot].item()
-                t4_raw = ((t4_val - slot * 17) * self.INV_1024) % self.k_tor
-                res_ang = ((t4_raw + 0.5) / 1024.0) * (2.0 * np.pi / 1024.0)
-                ang = base_ang + res_ang
-            else:
-                ang = base_ang
-            rec_thetas[bm] = ang
-            
-        # At Scale 4, also decode any remaining fine bonds (depth > 2)
-        if up_to_scale >= 4:
-            for slot in range(4, min(8, len(ordered_idx))):
+        
+        if len(ordered_idx) <= 4:
+            for slot in range(min(4, len(ordered_idx))):
                 bm = ordered_idx[slot]
-                s4_slot = slot - 4
-                t4_val = s4[s4_slot].item()
-                t4_raw = ((t4_val - s4_slot * 17) * self.INV_1024) % self.k_tor
-                ang = (t4_raw / 1024.0) * 2.0 * np.pi - np.pi
+                t3_val = s3[slot].item()
+                t3_raw = ((t3_val - slot * 13) * self.INV_1024) % self.k_tor
+                base_ang = (t3_raw / 1024.0) * 2.0 * np.pi - np.pi
+                if up_to_scale >= 4:
+                    t4_val = s4[slot].item()
+                    t4_raw = ((t4_val - slot * 17) * self.INV_1024) % self.k_tor
+                    res_ang = ((t4_raw + 0.5) / 1024.0) * (2.0 * np.pi / 1024.0)
+                    ang = base_ang + res_ang
+                else:
+                    ang = base_ang
                 rec_thetas[bm] = ang
+        elif len(ordered_idx) <= 8:
+            for slot in range(4):
+                b1 = slot * 2
+                b2 = slot * 2 + 1
+                t3_val = s3[slot].item()
+                t3_raw = ((t3_val - slot * 13) * self.INV_1024) % self.k_tor
+                bin1 = t3_raw // 32
+                bin2 = t3_raw % 32
+                if up_to_scale >= 4:
+                    t4_val = s4[slot].item()
+                    t4_raw = ((t4_val - slot * 17) * self.INV_1024) % self.k_tor
+                    res1 = t4_raw // 32
+                    res2 = t4_raw % 32
+                    frac1 = (bin1 * 32 + res1 + 0.5) / 1024.0
+                    frac2 = (bin2 * 32 + res2 + 0.5) / 1024.0
+                else:
+                    frac1 = (bin1 + 0.5) / 32.0
+                    frac2 = (bin2 + 0.5) / 32.0
+                if b1 < len(ordered_idx):
+                    rec_thetas[ordered_idx[b1]] = frac1 * 2.0 * np.pi - np.pi
+                if b2 < len(ordered_idx):
+                    rec_thetas[ordered_idx[b2]] = frac2 * 2.0 * np.pi - np.pi
+        else: # len(ordered_idx) > 8
+            for slot in range(4):
+                b0 = slot
+                b1 = 4 + slot
+                b2 = 8 + slot
+                b3 = 12 + slot
+                t3_val = s3[slot].item()
+                t3_raw = ((t3_val - slot * 13) * self.INV_1024) % self.k_tor
+                bin0 = (t3_raw // 64) % 16
+                bin1 = (t3_raw // 8) % 8
+                bin2 = t3_raw % 8
+                
+                if up_to_scale >= 4:
+                    t4_val = s4[slot].item()
+                    t4_raw = ((t4_val - slot * 17) * self.INV_1024) % self.k_tor
+                    res0 = (t4_raw // 64) % 16
+                    res1 = (t4_raw // 8) % 8
+                    bin3 = t4_raw % 8
+                    frac0 = (bin0 * 16 + res0 + 0.5) / 256.0
+                    frac1 = (bin1 * 8 + res1 + 0.5) / 64.0
+                    if b3 < len(ordered_idx):
+                        rec_thetas[ordered_idx[b3]] = (bin3 + 0.5) / 8.0 * 2.0 * np.pi - np.pi
+                else:
+                    frac0 = (bin0 + 0.5) / 16.0
+                    frac1 = (bin1 + 0.5) / 8.0
+                    
+                if b0 < len(ordered_idx):
+                    rec_thetas[ordered_idx[b0]] = frac0 * 2.0 * np.pi - np.pi
+                if b1 < len(ordered_idx):
+                    rec_thetas[ordered_idx[b1]] = frac1 * 2.0 * np.pi - np.pi
+                if b2 < len(ordered_idx):
+                    rec_thetas[ordered_idx[b2]] = (bin2 + 0.5) / 8.0 * 2.0 * np.pi - np.pi
                 
         thetas_t = rec_thetas.unsqueeze(0).expand(B, -1)
         sc = torch.stack([torch.sin(thetas_t), torch.cos(thetas_t)], dim=-1)

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ncm-dock"
+version = "0.1.0"
+description = "NCM-Dock: Pocket-conditioned generative molecular docking via Factored Kinematic Next-Scale Prediction and FreeSolvE biophysical relaxation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "vector-quantize-pytorch",
+    "rdkit",
+    "posebusters",
+    "spyrmsd",
+    "scipy",
+    "pyyaml",
+    "pytest"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ncm_dock*"]

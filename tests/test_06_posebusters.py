@@ -8,7 +8,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 import posebusters
 
-from ncm_dock.contracts import CanonicalComplexState, DiscretePoseTokens
+from ncm_dock.contracts import CanonicalComplexState, DiscretePoseTokens, ArticulatedPoseParams
 from ncm_dock.featurizer.precompute_dataset import ComplexPrecomputer
 from ncm_dock.tokenizer.factored_rvq import FactoredKinematicRVQ
 from ncm_dock.generator.next_scale_transformer import NextScaleTransformer
@@ -62,11 +62,16 @@ def test_06_posebusters_matched_relaxation_benchmark():
     
     pre = ComplexPrecomputer()
     tokenizer = FactoredKinematicRVQ().to(device)
+    if os.path.exists("checkpoints/stage1_rvq.pt"):
+        tokenizer.load_state_dict(torch.load("checkpoints/stage1_rvq.pt", map_location=device))
     tokenizer.eval()
     
     transformer = NextScaleTransformer(d_model=128, n_heads=4, num_layers=4, dropout=0.0).to(device)
+    if os.path.exists("checkpoints/stage2_transformer.pt"):
+        transformer.load_state_dict(torch.load("checkpoints/stage2_transformer.pt", map_location=device))
     transformer.eval()
     
+    searcher = BeamSearchDocking(transformer, tokenizer, beam_width=8)
     fs_relaxer = FreeSolvEAdapter()
     pb = posebusters.PoseBusters(config="dock")
     
@@ -101,15 +106,19 @@ def test_06_posebusters_matched_relaxation_benchmark():
             torsions_sc=state.gt_torsions_sc if state.rotatable_edges.shape[0] > 0 else None
         )
         
-        # 1. Measure Stage 1-4 Transformer + Tokenizer generation latency
+        # 1. Measure Stage 1-4 Transformer + Tokenizer generation latency via BeamSearchDocking
         start_t1 = time.perf_counter()
-        tokens = tokenizer.encode(state)
-        unrelaxed_coords = tokenizer.decode_coords(tokens, state, up_to_scale=4)
-        init_params = tokenizer.decode_params(tokens, state, up_to_scale=4)
+        coords_beams, tokens_beams, params_beams, logps = searcher.search(state)
+        unrelaxed_coords = coords_beams[0:1] # Top-1 beam
+        init_params = ArticulatedPoseParams(
+            translation=params_beams.translation[0:1],
+            rotation_6d=params_beams.rotation_6d[0:1],
+            torsions_sc=params_beams.torsions_sc[0:1]
+        )
         t_stage14_ms = (time.perf_counter() - start_t1) * 1000.0
         t_stage14_list.append(t_stage14_ms)
         
-        # 2. Measure FreeSolvE 40-step Articulated Relaxation latency
+        # 2. Measure FreeSolvE 25-step Articulated Relaxation latency
         start_t2 = time.perf_counter()
         relaxed_coords, relaxed_params, _ = fs_relaxer.relax_pose(
             state=state,
@@ -126,7 +135,7 @@ def test_06_posebusters_matched_relaxation_benchmark():
         unrelaxed_rmsds.append(rmsd_unrelaxed)
         relaxed_rmsds.append(rmsd_relaxed)
         
-        # 4. PoseBusters Evaluation
+        # 4. PoseBusters Evaluation with core intermolecular protein-ligand checks
         mol_cond = create_pocket_mol(state)
         mol_unrelaxed = make_rdkit_mol_with_coords(smi, unrelaxed_coords[0].cpu().numpy())
         mol_relaxed = make_rdkit_mol_with_coords(smi, relaxed_coords[0].cpu().numpy())
@@ -134,20 +143,15 @@ def test_06_posebusters_matched_relaxation_benchmark():
         core_cols = [
             'sanitization', 'all_atoms_connected', 'no_radicals',
             'bond_lengths', 'bond_angles', 'internal_steric_clash',
-            'aromatic_ring_flatness', 'double_bond_flatness'
+            'aromatic_ring_flatness', 'double_bond_flatness',
+            'minimum_distance_to_protein', 'volume_overlap_with_protein'
         ]
         
-        try:
-            df_un = pb.bust([mol_unrelaxed], None, mol_cond)
-            valid_un = bool(df_un[core_cols].all(axis=1).iloc[0])
-        except Exception:
-            valid_un = True
+        df_un = pb.bust([mol_unrelaxed], None, mol_cond)
+        valid_un = bool(df_un[core_cols].all(axis=1).iloc[0])
             
-        try:
-            df_rel = pb.bust([mol_relaxed], None, mol_cond)
-            valid_rel = bool(df_rel[core_cols].all(axis=1).iloc[0])
-        except Exception:
-            valid_rel = True
+        df_rel = pb.bust([mol_relaxed], None, mol_cond)
+        valid_rel = bool(df_rel[core_cols].all(axis=1).iloc[0])
             
         unrelaxed_pb_valid.append(valid_un)
         relaxed_pb_valid.append(valid_rel)

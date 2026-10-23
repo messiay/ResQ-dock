@@ -10,7 +10,8 @@ from ncm_dock.kinematics.forward_kinematics import (
     rotation_6d_to_matrix,
     matrix_to_rotation_6d,
     axis_angle_to_matrix,
-    matrix_to_axis_angle
+    matrix_to_axis_angle,
+    extract_kinematic_params
 )
 
 def generate_diverse_smiles_list():
@@ -134,19 +135,27 @@ def test_01_kinematics_roundtrip_and_covalent_integrity():
                     if drift_ang > max_angle_drift:
                         max_angle_drift = drift_ang
                         
-        # 5. Round-trip Reconstruction Verification
+        # 5. Inverse Kinematic Parameter Extraction and Round-trip Reconstruction Verification
+        ext_T_d, ext_r6d_d, ext_torsions_sc_d = extract_kinematic_params(
+            ref_coords=ref_coords_d,
+            target_coords=X_gt_d,
+            rotatable_edges=lig_graph.rotatable_edges,
+            kinematic_masks=lig_graph.kinematic_masks
+        )
         X_recon_d = ForwardKinematics.apply(
             ref_coords=ref_coords_d,
             rotatable_edges=lig_graph.rotatable_edges,
             kinematic_masks=lig_graph.kinematic_masks,
-            translation=T_gt_d,
-            rotation_6d=r6d_gt_d,
-            torsions_sc=torsions_sc_d
+            translation=ext_T_d,
+            rotation_6d=ext_r6d_d,
+            torsions_sc=ext_torsions_sc_d
         ).squeeze(0)
         
         coord_err = torch.max(torch.norm(X_recon_d - X_gt_d, dim=-1)).item()
         if coord_err > max_coord_error:
             max_coord_error = coord_err
+            
+        assert coord_err < 1e-4, f"Inverse kinematic reconstruction error {coord_err:.4e} exceeds 1e-4 Å"
             
         # 6. Autograd Backward Pass Integrity in float32 (zero NaN / Inf at critical angles 0 and pi)
         T_param = T_gt_d.to(torch.float32).clone().requires_grad_(True)
