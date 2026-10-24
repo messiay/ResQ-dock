@@ -230,7 +230,7 @@ def main():
     print("="*50)
     
     tokenizer = FactoredKinematicRVQ().to(device)
-    tokenizer.init_from_dataset(dataset)
+    tokenizer.init_from_dataset(train_set)
     stage1_ckpt_path = os.path.join(args.save_dir, "stage1_rvq.pt")
     if not args.overwrite and os.path.exists(stage1_ckpt_path):
         try:
@@ -280,7 +280,7 @@ def main():
     print("="*50)
 
     tokenizer = FactoredKinematicRVQ().to(device)
-    tokenizer.init_from_dataset(dataset)
+    tokenizer.init_from_dataset(train_set)
     tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
     tokenizer.eval()
 
