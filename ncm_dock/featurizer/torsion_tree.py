@@ -138,14 +138,15 @@ class KinematicTreeBuilder:
             neighbors[u].append(v)
             neighbors[v].append(u)
             
-        # BFS distances from root
-        dist_from_root = {root_atom: 0}
-        parent = {root_atom: -1}
+        # BFS distances from root (initialized for all nodes so disconnected components never cause KeyError)
+        dist_from_root = {i: 999 for i in range(N)}
+        dist_from_root[root_atom] = 0
+        parent = {i: -1 for i in range(N)}
         queue = [root_atom]
         while queue:
             curr = queue.pop(0)
             for nbr in neighbors[curr]:
-                if nbr not in dist_from_root:
+                if dist_from_root[nbr] == 999:
                     dist_from_root[nbr] = dist_from_root[curr] + 1
                     parent[nbr] = curr
                     queue.append(nbr)

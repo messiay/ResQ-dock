@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from ncm_dock.contracts import CanonicalComplexState, DiscretePoseTokens
 from ncm_dock.featurizer.pdb_ingestor import load_crystal_complex
-from ncm_dock.featurizer.precompute_dataset import ComplexPrecomputer, complex_collate_fn
+from ncm_dock.featurizer.precompute_dataset import ComplexPrecomputer, complex_collate_fn, load_complex_state
 from ncm_dock.tokenizer.factored_rvq import FactoredKinematicRVQ
 from ncm_dock.tokenizer.train_stage1 import train_stage1_epoch, evaluate_stage1
 from ncm_dock.generator.next_scale_transformer import NextScaleTransformer
@@ -118,6 +118,8 @@ def main():
     parser.add_argument("--use_amp", action="store_true", default=torch.cuda.is_available(), help="Enable bfloat16 AMP on CUDA")
     parser.add_argument("--max_complexes", type=int, default=None, help="Cap total complexes loaded")
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible split")
+    parser.add_argument("--d_model", type=int, default=128, help="Transformer hidden dimension")
+    parser.add_argument("--num_layers", type=int, default=4, help="Transformer number of layers")
     args = parser.parse_args()
 
     print("="*75)
@@ -136,10 +138,22 @@ def main():
     # -------------------------------------------------------------------------
     dataset: List[CanonicalComplexState] = []
     
-    # Check if data_dir has real crystal pairs
-    pairs = find_crystal_complexes(args.data_dir) if args.data_dir else []
+    # 1. Check if data_dir contains precomputed .pt tensors (memory-mapped)
+    pt_files = glob.glob(os.path.join(args.data_dir, "*.pt")) if args.data_dir and os.path.exists(args.data_dir) else []
     
-    if pairs:
+    if pt_files:
+        print(f"\nDiscovered {len(pt_files)} precomputed .pt crystal complexes in {args.data_dir}...")
+        if args.max_complexes:
+            pt_files = pt_files[:args.max_complexes]
+        for p in pt_files:
+            try:
+                st = load_complex_state(p, mmap=True)
+                dataset.append(st)
+            except Exception as e:
+                print(f"Warning: Failed to load {p}: {e}")
+    elif os.path.exists(args.data_dir) and find_crystal_complexes(args.data_dir):
+        # Check if data_dir has real crystal pairs (raw PDB + SDF)
+        pairs = find_crystal_complexes(args.data_dir)
         print(f"\nDiscovered {len(pairs)} crystal complex PDB/SDF pairs in {args.data_dir}...")
         if args.max_complexes:
             pairs = pairs[:args.max_complexes]
@@ -151,7 +165,7 @@ def main():
                 print(f"Warning: Failed to ingest complex {cid}: {e}")
     else:
         # Fallback / Demonstration mode with diverse drug-like complexes
-        print(f"\nNo real PDB/SDF pairs found in '{args.data_dir}'. Generating standardized diverse training dataset...")
+        print(f"\nNo real PDB/SDF or .pt complexes found in '{args.data_dir}'. Generating standardized diverse training dataset...")
         pre = ComplexPrecomputer()
         diverse_smiles = [
             "CC(=O)Oc1ccccc1C(=O)O",                     # Aspirin
@@ -257,7 +271,7 @@ def main():
     tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
     tokenizer.eval()
 
-    transformer = NextScaleTransformer(d_model=128, n_heads=4, num_layers=4, dropout=0.0).to(device)
+    transformer = NextScaleTransformer(d_model=args.d_model, n_heads=4, num_layers=args.num_layers, dropout=0.0).to(device)
     stage2_ckpt_path = os.path.join(args.save_dir, "stage2_transformer.pt")
     if os.path.exists(stage2_ckpt_path):
         try:
