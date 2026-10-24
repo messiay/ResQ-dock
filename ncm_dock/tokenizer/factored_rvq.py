@@ -97,14 +97,21 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             threshold_ema_dead_code=threshold_ema_dead_code,
             kmeans_init=False
         )
-        
+        self.trans_bound = 3.0
+        self.register_buffer("trans_bound_buf", torch.tensor([3.0]))
         self._init_structured_codebooks()
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        if prefix + "trans_bound_buf" in state_dict:
+            self.trans_bound = float(state_dict[prefix + "trans_bound_buf"].item())
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, False, missing_keys, unexpected_keys, error_msgs)
 
     def _init_structured_codebooks(self):
         """Initializes codebooks with uniform spatial and SO(3) coverings."""
         with torch.no_grad():
-            # S1: 8x8x8 = 512 grid in [-3.0, 3.0]^3 (exact bin centers)
-            lin1 = torch.linspace(-3.0 + 0.375, 3.0 - 0.375, 8)
+            tb = getattr(self, "trans_bound", 3.0)
+            step1 = 2.0 * tb / 8.0
+            lin1 = torch.linspace(-tb + step1 / 2.0, tb - step1 / 2.0, 8)
             gx, gy, gz = torch.meshgrid(lin1, lin1, lin1, indexing='ij')
             self._grid_s1 = torch.stack([gx, gy, gz], dim=-1).reshape(512, 3)
             embed_s1 = torch.zeros(1, 512, self.dim_s1)
@@ -116,8 +123,9 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
             self.s1_dec.weight.zero_()
             self.s1_dec.weight[:3, :3] = torch.eye(3)
             
-            # S2a: 8x8x8 = 512 grid in [-0.375, 0.375]^3 (exact residual bin centers)
-            lin2 = torch.linspace(-0.375 + 0.375/8.0, 0.375 - 0.375/8.0, 8)
+            rb = step1 / 2.0
+            step2 = 2.0 * rb / 8.0
+            lin2 = torch.linspace(-rb + step2 / 2.0, rb - step2 / 2.0, 8)
             gx2, gy2, gz2 = torch.meshgrid(lin2, lin2, lin2, indexing='ij')
             self._grid_s2a = torch.stack([gx2, gy2, gz2], dim=-1).reshape(512, 3)
             embed_s2a = torch.zeros(1, 512, self.dim_s2a)
@@ -161,6 +169,44 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
                 self.tor_rvq.layers[level]._codebook.embed.copy_(embed_tor)
                 self.tor_rvq.layers[level]._codebook.initted.fill_(True)
 
+    def init_from_dataset(self, dataset: List[CanonicalComplexState]):
+        """Calibrates spatial and rotational codebooks to empirical crystal complexes."""
+        with torch.no_grad():
+            t_list = [s.gt_translation for s in dataset if s.gt_translation is not None]
+            if len(t_list) > 0:
+                max_t = float(max(torch.max(torch.abs(t)).item() for t in t_list))
+                self.trans_bound = max(3.0, max_t)
+                self.trans_bound_buf.fill_(self.trans_bound)
+                tb = self.trans_bound
+                step1 = 2.0 * tb / 8.0
+                lin1 = torch.linspace(-tb + step1 / 2.0, tb - step1 / 2.0, 8)
+                gx, gy, gz = torch.meshgrid(lin1, lin1, lin1, indexing='ij')
+                self._grid_s1 = torch.stack([gx, gy, gz], dim=-1).reshape(512, 3)
+                self.s1_vq._codebook.embed[0, :, :3] = self._grid_s1
+                
+                rb = step1 / 2.0
+                step2 = 2.0 * rb / 8.0
+                lin2 = torch.linspace(-rb + step2 / 2.0, rb - step2 / 2.0, 8)
+                gx2, gy2, gz2 = torch.meshgrid(lin2, lin2, lin2, indexing='ij')
+                self._grid_s2a = torch.stack([gx2, gy2, gz2], dim=-1).reshape(512, 3)
+                self.s2a_vq._codebook.embed[0, :, :3] = self._grid_s2a
+
+            r6d_list = [s.gt_rotation_6d for s in dataset if s.gt_rotation_6d is not None]
+            if len(r6d_list) > 0:
+                train_r6d = torch.stack(r6d_list, dim=0).cpu()
+                N_data = train_r6d.shape[0]
+                anchors = torch.zeros(self.k_s2b, 6)
+                if N_data >= self.k_s2b:
+                    anchors.copy_(train_r6d[:self.k_s2b])
+                else:
+                    anchors[:N_data].copy_(train_r6d)
+                    idx = torch.randint(0, N_data, (self.k_s2b - N_data,))
+                    anchors[N_data:].copy_(train_r6d[idx] + torch.randn(self.k_s2b - N_data, 6) * 0.05)
+                self._r6d_anchors = anchors
+                embed_s2b = torch.zeros(1, self.k_s2b, self.dim_s2b)
+                embed_s2b[0, :, :6] = self._r6d_anchors
+                self.s2b_vq._codebook.embed.copy_(embed_s2b)
+
     def encode(self, state: CanonicalComplexState) -> DiscretePoseTokens:
         device = next(self.parameters()).device
         assert state.gt_translation is not None and state.gt_rotation_6d is not None
@@ -168,20 +214,22 @@ class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):
         T = state.gt_translation.to(device)
         r6d = state.gt_rotation_6d.to(device)
         
-        # Scale 1: Coarse Translation (8 uniform bins spanning [-3.0, 3.0])
-        ix = torch.clamp(((T[0] + 3.0) / 6.0 * 8.0).long(), 0, 7)
-        iy = torch.clamp(((T[1] + 3.0) / 6.0 * 8.0).long(), 0, 7)
-        iz = torch.clamp(((T[2] + 3.0) / 6.0 * 8.0).long(), 0, 7)
+        # Scale 1: Coarse Translation
+        tb = getattr(self, "trans_bound", 3.0)
+        ix = torch.clamp(((T[0] + tb) / (2.0 * tb) * 8.0).long(), 0, 7)
+        iy = torch.clamp(((T[1] + tb) / (2.0 * tb) * 8.0).long(), 0, 7)
+        iz = torch.clamp(((T[2] + tb) / (2.0 * tb) * 8.0).long(), 0, 7)
         s1_raw = (ix * 64 + iy * 8 + iz).item()
         s1_val = (s1_raw * self.PERM_512) % self.k_s1
         s1_idx = torch.tensor([[s1_val]], dtype=torch.long, device=device)
         T_hat1 = self._grid_s1[s1_raw].to(device)
         
-        # Scale 2: Residual Translation & Orientation (8 uniform bins spanning [-0.375, 0.375])
+        # Scale 2: Residual Translation & Orientation
+        rb = (2.0 * tb / 8.0) / 2.0
         delta_T = T - T_hat1
-        dx = torch.clamp(((delta_T[0] + 0.375) / 0.75 * 8.0).long(), 0, 7)
-        dy = torch.clamp(((delta_T[1] + 0.375) / 0.75 * 8.0).long(), 0, 7)
-        dz = torch.clamp(((delta_T[2] + 0.375) / 0.75 * 8.0).long(), 0, 7)
+        dx = torch.clamp(((delta_T[0] + rb) / (2.0 * rb) * 8.0).long(), 0, 7)
+        dy = torch.clamp(((delta_T[1] + rb) / (2.0 * rb) * 8.0).long(), 0, 7)
+        dz = torch.clamp(((delta_T[2] + rb) / (2.0 * rb) * 8.0).long(), 0, 7)
         s2a_raw = (dx * 64 + dy * 8 + dz).item()
         s2a_val = (s2a_raw * self.PERM_512) % self.k_s2a
         s2a_idx = torch.tensor([[s2a_val]], dtype=torch.long, device=device)

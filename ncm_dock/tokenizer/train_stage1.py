@@ -102,24 +102,7 @@ def evaluate_stage1(
             c4 = model.decode_coords(tokens, state, up_to_scale=4)
             
             r1 = symmetry_aware_rmsd(c1, gt_coords, state.automorphism_perms).item()
-            M = state.rotatable_edges.shape[0]
-            if M > 0 and state.kinematic_masks.shape[0] > 0:
-                is_rotated = state.kinematic_masks.any(dim=0)
-                root_atoms = (~is_rotated)
-                if root_atoms.sum() > 0:
-                    r2 = torch.sqrt(torch.mean((c2[0, root_atoms] - gt_coords[0, root_atoms])**2)).item()
-                else:
-                    gt_rigid = ForwardKinematics.apply(
-                        ref_coords=state.ligand_ref_coords,
-                        rotatable_edges=state.rotatable_edges,
-                        kinematic_masks=state.kinematic_masks,
-                        translation=state.gt_translation,
-                        rotation_6d=state.gt_rotation_6d,
-                        torsions_sc=None
-                    )
-                    r2 = symmetry_aware_rmsd(c2, gt_rigid, state.automorphism_perms).item()
-            else:
-                r2 = symmetry_aware_rmsd(c2, gt_coords, state.automorphism_perms).item()
+            r2 = symmetry_aware_rmsd(c2, gt_coords, state.automorphism_perms).item()
             r3 = symmetry_aware_rmsd(c3, gt_coords, state.automorphism_perms).item()
             r4 = symmetry_aware_rmsd(c4, gt_coords, state.automorphism_perms).item()
             

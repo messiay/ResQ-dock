@@ -52,10 +52,33 @@ def train_stage2_epoch(
         # True Corrective Torsion Targets under Stochastic Codebook Perturbation
         if perturb and (torch.rand(1).item() < model.p_perturb) and state.rotatable_edges.shape[0] > 0:
             with torch.no_grad():
-                # 1. Perturb Scale 1 & Scale 2 tokens in codebook space
-                p_s1 = (gt_tokens.scale1_anchor + torch.randint(-2, 3, gt_tokens.scale1_anchor.shape, device=device)) % model.k_s1
-                p_s2a = (gt_tokens.scale2_rigid[:, 0:1] + torch.randint(-2, 3, gt_tokens.scale2_rigid[:, 0:1].shape, device=device)) % model.k_s2a
-                p_s2b = (gt_tokens.scale2_rigid[:, 1:2] + torch.randint(-3, 4, gt_tokens.scale2_rigid[:, 1:2].shape, device=device)) % model.k_s2b
+                # 1. Perturb Scale 1 & Scale 2 in underlying Euclidean grid space
+                s1_val = gt_tokens.scale1_anchor.item()
+                s1_raw = (s1_val * tokenizer.INV_512) % tokenizer.k_s1
+                ix1, iy1, iz1 = (s1_raw // 64) % 8, (s1_raw // 8) % 8, s1_raw % 8
+                ix1_p = min(max(ix1 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                iy1_p = min(max(iy1 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                iz1_p = min(max(iz1 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                s1_raw_p = ix1_p * 64 + iy1_p * 8 + iz1_p
+                p_s1 = torch.tensor([[(s1_raw_p * tokenizer.PERM_512) % tokenizer.k_s1]], dtype=torch.long, device=device)
+
+                s2a_val = gt_tokens.scale2_rigid[0, 0].item()
+                s2a_raw = (s2a_val * tokenizer.INV_512) % tokenizer.k_s2a
+                ix2, iy2, iz2 = (s2a_raw // 64) % 8, (s2a_raw // 8) % 8, s2a_raw % 8
+                ix2_p = min(max(ix2 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                iy2_p = min(max(iy2 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                iz2_p = min(max(iz2 + torch.randint(-1, 2, (1,)).item(), 0), 7)
+                s2a_raw_p = ix2_p * 64 + iy2_p * 8 + iz2_p
+                p_s2a = torch.tensor([[(s2a_raw_p * tokenizer.PERM_512) % tokenizer.k_s2a]], dtype=torch.long, device=device)
+
+                s2b_val = gt_tokens.scale2_rigid[0, 1].item()
+                s2b_raw = (s2b_val * tokenizer.INV_1024) % tokenizer.k_s2b
+                cur_r = tokenizer._r6d_anchors[s2b_raw:s2b_raw+1].to(device)
+                dist_r = torch.sum((tokenizer._r6d_anchors.to(device) - cur_r)**2, dim=-1)
+                _, topk_r = torch.topk(dist_r, k=min(5, len(dist_r)), largest=False)
+                pick_r = topk_r[torch.randint(0, len(topk_r), (1,)).item()].item()
+                p_s2b = torch.tensor([[(pick_r * tokenizer.PERM_1024) % tokenizer.k_s2b]], dtype=torch.long, device=device)
+
                 p_rigid = torch.cat([p_s2a, p_s2b], dim=-1)
                 
                 perturbed_tokens = DiscretePoseTokens(
@@ -77,7 +100,7 @@ def train_stage2_epoch(
                     kinematic_masks=state.kinematic_masks,
                     translation=state.gt_translation,
                     rotation_6d=state.gt_rotation_6d,
-                    torsions_sc=state.gt_torsions_sc
+                    torsions_sc=state.gt_torsions_sc if state.rotatable_edges.shape[0] > 0 else None
                 ).squeeze(0).to(device)
                 
                 # 4. Invert perturbed rigid frame onto gt coordinates

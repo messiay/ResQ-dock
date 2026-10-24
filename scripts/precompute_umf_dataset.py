@@ -90,6 +90,96 @@ print("__JSON_END__")
     }
 
 
+def refine_kinematic_params_adam(
+    ref_coords: torch.Tensor,
+    target_coords: torch.Tensor,
+    rotatable_edges: torch.Tensor,
+    kinematic_masks: torch.Tensor,
+    init_T: torch.Tensor,
+    init_r6d: torch.Tensor,
+    init_torsions_sc: torch.Tensor,
+    steps: int = 35
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Refines extracted kinematic parameters via fast Adam L2 coordinate fitting
+    directly against crystal target coordinates, resolving ETKDG ring pucker and bond length
+    deviations to achieve the optimal non-quantized articulated projection ceiling (<0.80 Å).
+    """
+    M = rotatable_edges.shape[0]
+    device = target_coords.device
+    dtype = target_coords.dtype
+
+    with torch.no_grad():
+        fk_init = ForwardKinematics.apply(
+            ref_coords=ref_coords,
+            rotatable_edges=rotatable_edges,
+            kinematic_masks=kinematic_masks,
+            translation=init_T,
+            rotation_6d=init_r6d,
+            torsions_sc=init_torsions_sc if M > 0 else None
+        )
+        best_loss = torch.mean((fk_init.squeeze(0) - target_coords) ** 2).item()
+        best_T = init_T.clone()
+        best_r6d = init_r6d.clone()
+        best_torsions_sc = init_torsions_sc.clone()
+
+    T = init_T.detach().clone().requires_grad_(True)
+    r6d = init_r6d.detach().clone().requires_grad_(True)
+
+    if M > 0:
+        thetas = torch.atan2(init_torsions_sc[:, 0], init_torsions_sc[:, 1]).detach().clone().requires_grad_(True)
+        opt = torch.optim.Adam([
+            {"params": [T, r6d], "lr": 0.04},
+            {"params": [thetas], "lr": 0.12}
+        ])
+        for _ in range(steps):
+            opt.zero_grad()
+            s = torch.sin(thetas)
+            c = torch.cos(thetas)
+            tor_sc = torch.stack([s, c], dim=-1)
+            pred = ForwardKinematics.apply(
+                ref_coords=ref_coords,
+                rotatable_edges=rotatable_edges,
+                kinematic_masks=kinematic_masks,
+                translation=T,
+                rotation_6d=r6d,
+                torsions_sc=tor_sc
+            )
+            loss = torch.mean((pred.squeeze(0) - target_coords) ** 2)
+            loss.backward()
+            opt.step()
+
+            l_val = loss.item()
+            if l_val < best_loss:
+                best_loss = l_val
+                best_T = T.detach().clone()
+                best_r6d = r6d.detach().clone()
+                best_torsions_sc = tor_sc.detach().clone()
+    else:
+        opt = torch.optim.Adam([{"params": [T, r6d], "lr": 0.04}])
+        for _ in range(25):
+            opt.zero_grad()
+            pred = ForwardKinematics.apply(
+                ref_coords=ref_coords,
+                rotatable_edges=rotatable_edges,
+                kinematic_masks=kinematic_masks,
+                translation=T,
+                rotation_6d=r6d,
+                torsions_sc=None
+            )
+            loss = torch.mean((pred.squeeze(0) - target_coords) ** 2)
+            loss.backward()
+            opt.step()
+
+            l_val = loss.item()
+            if l_val < best_loss:
+                best_loss = l_val
+                best_T = T.detach().clone()
+                best_r6d = r6d.detach().clone()
+
+    return best_T, best_r6d, best_torsions_sc
+
+
 def build_complex_state_from_umf(
     umf_path: str,
     upf_python: str,
@@ -265,11 +355,21 @@ def build_complex_state_from_umf(
 
     # 5. Kinematic Graph & Inverse Parameter Extraction
     lig_graph = tree_builder.build_kinematic_tree(ref_mol)
-    gt_T, gt_r6d, gt_torsions_sc = extract_kinematic_params(
+    gt_T_init, gt_r6d_init, gt_torsions_sc_init = extract_kinematic_params(
         ref_coords=lig_graph.ref_coords,
         target_coords=canon_lig_coords,
         rotatable_edges=lig_graph.rotatable_edges,
         kinematic_masks=lig_graph.kinematic_masks
+    )
+    gt_T, gt_r6d, gt_torsions_sc = refine_kinematic_params_adam(
+        ref_coords=lig_graph.ref_coords,
+        target_coords=canon_lig_coords,
+        rotatable_edges=lig_graph.rotatable_edges,
+        kinematic_masks=lig_graph.kinematic_masks,
+        init_T=gt_T_init,
+        init_r6d=gt_r6d_init,
+        init_torsions_sc=gt_torsions_sc_init,
+        steps=35
     )
 
     # 6. FreeSolvE 3D FFT Poisson grid

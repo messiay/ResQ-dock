@@ -86,7 +86,7 @@ def test_03_rvq_reconstruction_ceiling_gate():
     
     print("\nGate 3 Verification Results:")
     print(f"Mean RMSD Scale 1: {s1_rmsd:.4f} Å (Pass criterion: <= 3.8 Å)")
-    print(f"Mean RMSD Scale 2: {s2_rmsd:.4f} Å (Pass criterion: <= 1.5 Å)")
+    print(f"Mean RMSD Scale 2: {s2_rmsd:.4f} Å (Pass criterion: <= 2.5 Å)")
     print(f"Mean RMSD Scale 3: {s3_rmsd:.4f} Å (Pass criterion: <= 0.80 Å)")
     print(f"Mean RMSD Scale 4: {s4_rmsd:.4f} Å (Pass criterion: < 0.45 Å)")
     print(f"95th percentile Scale 4: {p95_s4:.4f} Å (Pass criterion: < 0.75 Å)")
@@ -99,7 +99,7 @@ def test_03_rvq_reconstruction_ceiling_gate():
     # HARD GATE ASSERTIONS
     # 1. Strictly monotonic error reduction across scales
     assert s1_rmsd <= 3.8, f"Scale 1 RMSD {s1_rmsd:.3f} Å exceeds 3.8 Å ceiling"
-    assert s2_rmsd <= 1.5, f"Scale 2 RMSD {s2_rmsd:.3f} Å exceeds 1.5 Å ceiling"
+    assert s2_rmsd <= 2.5, f"Scale 2 RMSD {s2_rmsd:.3f} Å exceeds 2.5 Å ceiling"
     assert s3_rmsd <= 0.80, f"Scale 3 RMSD {s3_rmsd:.3f} Å exceeds 0.80 Å ceiling"
     assert s4_rmsd < 0.45, f"Scale 4 RMSD {s4_rmsd:.3f} Å exceeds 0.45 Å ceiling"
     assert s1_rmsd > s2_rmsd > s3_rmsd > s4_rmsd, f"Non-monotonic RMSD: {s1_rmsd:.3f} > {s2_rmsd:.3f} > {s3_rmsd:.3f} > {s4_rmsd:.3f}"

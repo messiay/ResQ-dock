@@ -120,6 +120,7 @@ def main():
     parser.add_argument("--random_seed", type=int, default=42, help="Random seed for reproducible split")
     parser.add_argument("--d_model", type=int, default=128, help="Transformer hidden dimension")
     parser.add_argument("--num_layers", type=int, default=4, help="Transformer number of layers")
+    parser.add_argument("--overwrite", action="store_true", default=False, help="Overwrite existing checkpoints")
     args = parser.parse_args()
 
     print("="*75)
@@ -229,17 +230,27 @@ def main():
     print("="*50)
     
     tokenizer = FactoredKinematicRVQ().to(device)
+    tokenizer.init_from_dataset(dataset)
     stage1_ckpt_path = os.path.join(args.save_dir, "stage1_rvq.pt")
-    if os.path.exists(stage1_ckpt_path):
+    if not args.overwrite and os.path.exists(stage1_ckpt_path):
         try:
             tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
             print(f"Loaded existing checkpoint from {stage1_ckpt_path}")
         except Exception:
             pass
 
+    # Baseline evaluation of calibrated structured codebooks
+    init_val_res = evaluate_stage1(tokenizer, val_set, device=device)
+    best_val_rmsd_s4 = init_val_res.get("mean_rmsd_s4", 999.0)
+    torch.save(tokenizer.state_dict(), stage1_ckpt_path)
+    print(f"Calibrated Structured RVQ Baseline | "
+          f"Val S1: {init_val_res.get('mean_rmsd_s1', 0.0):.2f}Å, "
+          f"S2: {init_val_res.get('mean_rmsd_s2', 0.0):.2f}Å, "
+          f"S3: {init_val_res.get('mean_rmsd_s3', 0.0):.2f}Å, "
+          f"S4: {best_val_rmsd_s4:.3f}Å")
+
     opt_stage1 = torch.optim.AdamW(tokenizer.parameters(), lr=args.lr_stage1, weight_decay=1e-4)
     fs_adapter = FreeSolvEAdapter()
-    best_val_rmsd_s4 = 999.0
 
     for epoch in range(1, args.epochs_stage1 + 1):
         t0 = time.time()
@@ -268,12 +279,14 @@ def main():
     print("STAGE 2: Training Next-Scale Transformer with Corrective Torsion Targets...")
     print("="*50)
 
+    tokenizer = FactoredKinematicRVQ().to(device)
+    tokenizer.init_from_dataset(dataset)
     tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
     tokenizer.eval()
 
     transformer = NextScaleTransformer(d_model=args.d_model, n_heads=4, num_layers=args.num_layers, dropout=0.0).to(device)
     stage2_ckpt_path = os.path.join(args.save_dir, "stage2_transformer.pt")
-    if os.path.exists(stage2_ckpt_path):
+    if not args.overwrite and os.path.exists(stage2_ckpt_path):
         try:
             transformer.load_state_dict(torch.load(stage2_ckpt_path, map_location=device))
             print(f"Loaded existing checkpoint from {stage2_ckpt_path}")
@@ -306,7 +319,7 @@ def main():
                     kinematic_masks=st.kinematic_masks,
                     translation=st.gt_translation,
                     rotation_6d=st.gt_rotation_6d,
-                    torsions_sc=st.gt_torsions_sc
+                    torsions_sc=st.gt_torsions_sc if st.rotatable_edges.shape[0] > 0 else None
                 )
                 coords, _, _, _ = searcher.search(st, device=device)
                 rmsd = symmetry_aware_rmsd(coords[0:1], gt_c, st.automorphism_perms).item()
@@ -352,7 +365,7 @@ def main():
             kinematic_masks=st.kinematic_masks,
             translation=st.gt_translation,
             rotation_6d=st.gt_rotation_6d,
-            torsions_sc=st.gt_torsions_sc
+            torsions_sc=st.gt_torsions_sc if st.rotatable_edges.shape[0] > 0 else None
         )
 
         t1 = time.perf_counter()
