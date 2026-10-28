@@ -16,12 +16,16 @@ def train_stage2_epoch(
     dataset: List[CanonicalComplexState],
     optimizer: torch.optim.Optimizer,
     device: torch.device,
-    perturb: bool = True
+    perturb: bool = True,
+    use_steered_loss: bool = True,
+    modality_dropout: bool = True
 ) -> Dict[str, float]:
     """
     Runs one training epoch of Stage-2 Transformer with cross-entropy across all 4 scales.
     When perturb=True, injects Scale-2 nearest-codebook noise and computes TRUE corrective
     torsion targets (s3_corr, s4_corr) to eliminate exposure bias during beam search.
+    When use_steered_loss=True, applies Counterfactual Loss Steering: penalizes continuous SO(3)
+    chordal distance and upweights critical orientation and core scaffold degrees of freedom.
     """
     model.train()
     tokenizer.eval()
@@ -123,17 +127,36 @@ def train_stage2_epoch(
                 
                 input_tokens = perturbed_tokens
         
-        # Forward pass conditioned on input tokens (either unperturbed or perturbed)
-        logits = model(state, input_tokens, perturb=False)
+        # Forward pass conditioned on input tokens with Modality Dropout
+        logits = model(state, input_tokens, perturb=False, modality_dropout=modality_dropout)
         
         l_s1 = F.cross_entropy(logits["logits_s1"], t_s1)
         l_s2a = F.cross_entropy(logits["logits_s2a"], t_s2a)
         l_s2b = F.cross_entropy(logits["logits_s2b"], t_s2b)
-        l_s2 = l_s2a + l_s2b
         l_s3 = F.cross_entropy(logits["logits_s3"][0], t_s3_target)
         l_s4 = F.cross_entropy(logits["logits_s4"][0], t_s4_target)
         
-        loss = l_s1 + l_s2 + l_s3 + l_s4
+        # Counterfactual Loss Steering:
+        # Maps categorical s2b orientation distribution to continuous R^6 expected rotation vector
+        # Penalizes SO(3) chordal distance so 180-deg flips receive massive gradients compared to nearby anchors
+        if use_steered_loss and state.gt_rotation_6d is not None and hasattr(tokenizer, "_r6d_anchors"):
+            perm_inv = (torch.arange(tokenizer.k_s2b, device=device) * tokenizer.INV_1024) % tokenizer.k_s2b
+            r6d_anchors_by_token = tokenizer._r6d_anchors.to(device)[perm_inv]  # [1024, 6]
+            probs_s2b = F.softmax(logits["logits_s2b"], dim=-1)                 # [1, 1024]
+            r6d_pred = torch.matmul(probs_s2b, r6d_anchors_by_token)            # [1, 6]
+            gt_r6d = state.gt_rotation_6d.to(device)
+            if gt_r6d.dim() == 1:
+                gt_r6d = gt_r6d.unsqueeze(0)
+            l_so3 = F.mse_loss(r6d_pred, gt_r6d)
+
+            # Physically grounded, calibrated gradient weights:
+            # Orientation: 1.0x cross-entropy + 0.25x continuous SO(3) chordal distance penalty
+            # Core Torsions: 1.2x weight
+            l_s2 = l_s2a + l_s2b + 0.25 * l_so3
+            loss = 1.0 * l_s1 + l_s2 + 1.2 * l_s3 + 1.0 * l_s4
+        else:
+            l_s2 = l_s2a + l_s2b
+            loss = l_s1 + l_s2 + l_s3 + l_s4
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()

@@ -14,10 +14,12 @@ except Exception:
     freesolve = None
     HAS_FREESOLVE = False
 
+
 class FreeSolvEAdapter(BaseRelaxer):
     """
     Differentiable continuum solvation and C1 logarithmic soft-core Van der Waals engine.
-    Supports sub-10ms 3D FFT Poisson electrostatics and manifold articulated pose relaxation.
+    Supports sub-10ms 3D FFT Poisson electrostatics, internal ligand clash prevention,
+    and two-phase manifold articulated pose relaxation.
     """
     def __init__(
         self,
@@ -52,7 +54,6 @@ class FreeSolvEAdapter(BaseRelaxer):
         half_box = (G * dx) / 2.0
         
         # Grid bounds: [-half_box, +half_box] in each dimension
-        # Discretize charges onto grid via trilinear splatting
         grid_charges = torch.zeros((G, G, G), device=device, dtype=torch.float32)
         
         # Shift coords relative to grid center
@@ -83,7 +84,7 @@ class FreeSolvEAdapter(BaseRelaxer):
                             accumulate=True
                         )
                         
-        # Green's function kernel on periodic 3D grid: G(k) = 1 / (eps * (kx^2 + ky^2 + kz^2))
+        # Green's function kernel on periodic 3D grid
         kx = torch.fft.fftfreq(G, d=dx, device=device) * 2.0 * np.pi
         ky = torch.fft.fftfreq(G, d=dx, device=device) * 2.0 * np.pi
         kz = torch.fft.fftfreq(G, d=dx, device=device) * 2.0 * np.pi
@@ -92,17 +93,13 @@ class FreeSolvEAdapter(BaseRelaxer):
         k_sq = Kx**2 + Ky**2 + Kz**2
         k_sq[0, 0, 0] = 1.0 # Avoid div by zero at k=0
         
-        # Distance-dependent screened electrostatic potential:
-        # epsilon(k) smoothly transitions from epsilon_in = 4.0 (pocket contact / high k)
-        # to epsilon_water = 78.5 (bulk solvent exterior / low k -> 0)
-        k_screen = 0.3 # Screening frequency corresponding to ~3.3 Å Debye length
+        # Screened dielectric transition
+        k_screen = 0.3
         eps_k = self.epsilon_water - (self.epsilon_water - self.epsilon_in) * (k_sq / (k_sq + k_screen**2))
         
-        # Poisson Green's kernel in Fourier space: Phi(k) = 4*pi*rho(k) / (eps(k) * k^2)
         G_k = (4.0 * np.pi) / (eps_k * k_sq)
-        G_k[0, 0, 0] = 0.0 # Neutral background at k=0
+        G_k[0, 0, 0] = 0.0
         
-        # 3D FFT convolution
         rho_k = torch.fft.fftn(grid_charges)
         phi_k = rho_k * G_k
         phi_grid = torch.real(torch.fft.ifftn(phi_k))
@@ -113,10 +110,7 @@ class FreeSolvEAdapter(BaseRelaxer):
         grid: torch.Tensor,        # [G, G, G]
         coords: torch.Tensor,      # [B, N, 3] or [N, 3]
     ) -> torch.Tensor:
-        """
-        Differentiable trilinear grid interpolation using F.grid_sample.
-        Returns: [B, N] potential values.
-        """
+        """Differentiable trilinear grid interpolation."""
         if coords.dim() == 2:
             coords = coords.unsqueeze(0)
         B, N, _ = coords.shape
@@ -124,15 +118,10 @@ class FreeSolvEAdapter(BaseRelaxer):
         dx = self.grid_spacing
         half_box = (G * dx) / 2.0
         
-        # Normalize coords to [-1, 1] for grid_sample: shape [B, 1, 1, N, 3]
-        # grid_sample expects (x, y, z) in [-1, 1] corresponding to grid dimensions (D, H, W)
         norm_c = torch.clamp(coords / half_box, -1.0, 1.0)
         grid_input = norm_c.view(B, 1, 1, N, 3)
-        
-        # Grid shape for grid_sample: [B, C, D, H, W] = [B, 1, G, G, G]
         grid_5d = grid.unsqueeze(0).unsqueeze(0).expand(B, 1, G, G, G)
         
-        # Trilinear sampling
         sampled = F.grid_sample(grid_5d, grid_input, mode='bilinear', padding_mode='zeros', align_corners=True)
         return sampled.view(B, N)
 
@@ -144,89 +133,110 @@ class FreeSolvEAdapter(BaseRelaxer):
         poc_vdw: torch.Tensor,      # [N_poc]
     ) -> torch.Tensor:
         """
-        C1-Continuous Logarithmic Soft-Core Van der Waals Potential.
-        Prevents gradient explosion when r_ij -> 0.
-        Returns: [B] energy in kcal/mol.
+        C1-Continuous Logarithmic Soft-Core Van der Waals Potential between ligand and pocket.
+        Prevents gradient explosion when r_ij -> 0 while penalizing steric overlap.
         """
         B, N_lig, _ = lig_coords.shape
-        N_poc = poc_coords.shape[0]
-        device = lig_coords.device
-        
-        # Pairwise distances: [B, N_lig, N_poc]
-        # || lig_i - poc_j ||
         diff = lig_coords.unsqueeze(2) - poc_coords.unsqueeze(0).unsqueeze(0) # [B, N_lig, N_poc, 3]
-        dist_sq = torch.sum(diff ** 2, dim=-1) # [B, N_lig, N_poc]
+        dist_sq = torch.sum(diff ** 2, dim=-1)
         dist = torch.sqrt(dist_sq + 1e-6)
         
-        # Sigma_ij = sum of VDW radii
-        sigma_ij = (lig_vdw.unsqueeze(1) + poc_vdw.unsqueeze(0)).unsqueeze(0) # [1, N_lig, N_poc]
-        
-        # Standard Lennard-Jones: 4 * eps * [ (sigma/r)^12 - (sigma/r)^6 ]
+        sigma_ij = (lig_vdw.unsqueeze(1) + poc_vdw.unsqueeze(0)).unsqueeze(0)
         ratio = sigma_ij / dist
         ratio_6 = torch.clamp(ratio ** 6, max=1e4)
         ratio_12 = ratio_6 ** 2
-        e0 = 4.0 * self.vdw_eps_ij * (ratio_12 - ratio_6) # [B, N_lig, N_poc]
+        e0 = 4.0 * self.vdw_eps_ij * (ratio_12 - ratio_6)
         
-        # C1 logarithmic soft cap
         E_cap = self.vdw_e_cap
         s0 = self.vdw_s0
-        
         is_high = e0 > E_cap
         e_soft = torch.where(
             is_high,
             E_cap + s0 * torch.log(1.0 + torch.clamp((e0 - E_cap) / s0, min=0.0)),
             e0
         )
-        
-        # Sum over pairs: [B]
-        vdw_energy = torch.sum(e_soft, dim=(-1, -2))
-        return vdw_energy
+        return torch.sum(e_soft, dim=(-1, -2))
+
+    def soft_core_vdw_internal(
+        self,
+        lig_coords: torch.Tensor, # [B, N_lig, 3]
+        lig_vdw: torch.Tensor     # [N_lig]
+    ) -> torch.Tensor:
+        """
+        Intramolecular soft-core Van der Waals potential to prevent ligand self-clashes.
+        Evaluates 1-4 and higher non-bonded pairs within the ligand.
+        """
+        B, N_lig, _ = lig_coords.shape
+        if N_lig <= 3:
+            return torch.zeros(B, device=lig_coords.device)
+
+        diff = lig_coords.unsqueeze(2) - lig_coords.unsqueeze(1) # [B, N, N, 3]
+        dist_sq = torch.sum(diff ** 2, dim=-1)
+        dist = torch.sqrt(dist_sq + 1e-6)
+
+        sigma_ij = (lig_vdw.unsqueeze(1) + lig_vdw.unsqueeze(0)).unsqueeze(0)
+
+        # Repulsion threshold: penalize non-bonded pairs closer than 0.75 * (sigma_i + sigma_j)
+        ratio = (0.75 * sigma_ij) / dist
+        ratio_6 = torch.clamp(ratio ** 6, max=1e4)
+        e0 = 4.0 * self.vdw_eps_ij * (ratio_6 ** 2 - ratio_6)
+        e0 = torch.clamp(e0, min=0.0)
+
+        # Exclude diagonal (i==j) and 1-2 direct neighbors (diagonal=2 mask)
+        triu_mask = torch.triu(torch.ones(N_lig, N_lig, dtype=torch.bool, device=lig_coords.device), diagonal=2).unsqueeze(0)
+        e_internal = torch.sum(torch.where(triu_mask, e0, torch.zeros_like(e0)), dim=(-1, -2))
+        return e_internal
 
     def compute_physics_loss(
         self,
         state: CanonicalComplexState,
-        pred_coords: torch.Tensor, # [B, N_lig, 3] or [N_lig, 3]
+        pred_coords: torch.Tensor,
+        clash_weight: float = 1.0,
+        include_internal: bool = True
     ) -> torch.Tensor:
-        """
-        Evaluates composite biophysical loss: Soft-core VdW + Poisson electrostatics.
-        Returns scalar loss tensor [1] with full autograd tracking.
-        """
+        """Evaluates composite biophysical loss: Intermolecular VdW + Internal VdW + Poisson electrostatics."""
         if pred_coords.dim() == 2:
             pred_coords = pred_coords.unsqueeze(0)
-        B = pred_coords.shape[0]
         device = pred_coords.device
         
-        # 1. Soft-core VdW clash penalty with pocket atoms
+        # 1. Intermolecular VdW
         poc_coords = state.pocket_atom_coords.to(device=device, dtype=torch.float32)
         poc_vdw = state.pocket_atom_vdw.to(device=device, dtype=torch.float32)
         lig_vdw = state.ligand_atom_vdw.to(device=device, dtype=torch.float32)
+        vdw_ext = self.soft_core_vdw(pred_coords, lig_vdw, poc_coords, poc_vdw)
         
-        vdw_energy = self.soft_core_vdw(pred_coords, lig_vdw, poc_coords, poc_vdw) # [B]
-        
-        # 2. Electrostatic potential from Poisson grid
+        # 2. Intramolecular Ligand Self-Clash VdW
+        if include_internal:
+            vdw_int = self.soft_core_vdw_internal(pred_coords, lig_vdw)
+        else:
+            vdw_int = torch.zeros_like(vdw_ext)
+            
+        # 3. Electrostatics from Poisson grid
         if state.freesolve_fft_grid is not None:
             phi_grid = state.freesolve_fft_grid.to(device=device, dtype=torch.float32)
         else:
             poc_chg = state.pocket_atom_charges.to(device=device, dtype=torch.float32)
             phi_grid = self.compute_poisson_grid(poc_coords, poc_chg)
             
-        phi_sampled = self.interpolate_potential(phi_grid, pred_coords) # [B, N_lig]
-        lig_chg = state.ligand_atom_charges.to(device=device, dtype=torch.float32).unsqueeze(0) # [1, N_lig]
-        elec_energy = torch.sum(phi_sampled * lig_chg, dim=-1) # [B]
+        phi_sampled = self.interpolate_potential(phi_grid, pred_coords)
+        lig_chg = state.ligand_atom_charges.to(device=device, dtype=torch.float32).unsqueeze(0)
+        elec_energy = torch.sum(phi_sampled * lig_chg, dim=-1)
         
-        total_energy = torch.mean(vdw_energy + 0.1 * elec_energy)
+        total_energy = torch.mean(clash_weight * (vdw_ext + 1.2 * vdw_int) + 0.1 * elec_energy)
         return total_energy
 
     def relax_pose(
         self,
         state: CanonicalComplexState,
         init_params: ArticulatedPoseParams,
-        max_steps: int = 40,
-        lr: float = 0.05
+        max_steps: int = 45,
+        lr: float = 0.04
     ) -> Tuple[torch.Tensor, ArticulatedPoseParams, torch.Tensor]:
         """
-        Refines pose on the exact articulated manifold (T, r6d, theta) using Adam optimizer.
-        Returns: (relaxed_coords [B, N, 3], relaxed_params, final_energies [B])
+        Two-Phase Articulated Manifold Relaxation:
+        - Phase 1 (Clash Ejection, 25 steps): Soft-core VdW clash repulsion at lr=0.04 to push atoms out of barriers.
+        - Phase 2 (Solvation Settling, 20 steps): Fine-tuning at lr=0.012 with Poisson electrostatics + VdW.
+        - Includes Gram-Schmidt re-projection on SO(3) to prevent rotational metric drift.
         """
         device = state.pocket_atom_coords.device
         T_param = init_params.translation.clone().detach().to(device).requires_grad_(True)
@@ -235,7 +245,6 @@ class FreeSolvEAdapter(BaseRelaxer):
         params_to_opt = [T_param, r6d_param]
         M = state.rotatable_edges.shape[0]
         if M > 0 and init_params.torsions_sc is not None:
-            # Optimize angles theta directly in R^M to guarantee continuous exploration
             init_s = init_params.torsions_sc[..., 0]
             init_c = init_params.torsions_sc[..., 1]
             init_theta = torch.atan2(init_s, init_c)
@@ -246,7 +255,7 @@ class FreeSolvEAdapter(BaseRelaxer):
             
         optimizer = torch.optim.Adam(params_to_opt, lr=lr)
         
-        # Evaluate initial baseline energy
+        # Initial baseline energy
         with torch.no_grad():
             init_coords = ForwardKinematics.apply(
                 ref_coords=state.ligand_ref_coords,
@@ -256,13 +265,25 @@ class FreeSolvEAdapter(BaseRelaxer):
                 rotation_6d=init_params.rotation_6d,
                 torsions_sc=init_params.torsions_sc if M > 0 else None
             )
-            best_loss = self.compute_physics_loss(state, init_coords).item()
+            best_loss = self.compute_physics_loss(state, init_coords, clash_weight=1.0).item()
             best_T = init_params.translation.clone()
             best_r6d = init_params.rotation_6d.clone()
             best_theta = theta_param.clone() if theta_param is not None else None
 
+        n_phase1 = max(15, int(max_steps * 0.60)) # Ejection phase
+        
         for step in range(max_steps):
             optimizer.zero_grad()
+            
+            # Two-phase schedule: adjust clash weight and learning rate
+            if step < n_phase1:
+                c_weight = 2.0  # Emphasize pushing out of steric barriers
+            else:
+                c_weight = 1.0  # Settle into electrostatic minimum
+                if step == n_phase1:
+                    for g in optimizer.param_groups:
+                        g['lr'] = lr * 0.30
+
             if theta_param is not None:
                 sc = torch.stack([torch.sin(theta_param), torch.cos(theta_param)], dim=-1)
             else:
@@ -277,19 +298,27 @@ class FreeSolvEAdapter(BaseRelaxer):
                 torsions_sc=sc
             )
             
-            loss = self.compute_physics_loss(state, pred_coords)
-            l_val = loss.item()
-            if l_val < best_loss:
-                best_loss = l_val
-                best_T = T_param.detach().clone()
-                best_r6d = r6d_param.detach().clone()
-                if theta_param is not None:
-                    best_theta = theta_param.detach().clone()
+            loss = self.compute_physics_loss(state, pred_coords, clash_weight=c_weight)
+            with torch.no_grad():
+                eval_loss = self.compute_physics_loss(state, pred_coords, clash_weight=1.0).item()
+                if eval_loss < best_loss:
+                    best_loss = eval_loss
+                    best_T = T_param.detach().clone()
+                    best_r6d = r6d_param.detach().clone()
+                    if theta_param is not None:
+                        best_theta = theta_param.detach().clone()
                     
             loss.backward()
             optimizer.step()
-            
-        # Final evaluation using best energy parameters
+
+            # Re-orthonormalize rotation_6d back to SO(3) every 5 steps
+            if (step + 1) % 5 == 0:
+                with torch.no_grad():
+                    R_ortho = rotation_6d_to_matrix(r6d_param)
+                    r6d_clean = matrix_to_rotation_6d(R_ortho)
+                    r6d_param.copy_(r6d_clean)
+
+        # Final evaluation using best checkpoint parameters
         with torch.no_grad():
             if best_theta is not None:
                 final_sc = torch.stack([torch.sin(best_theta), torch.cos(best_theta)], dim=-1)
@@ -311,7 +340,6 @@ class FreeSolvEAdapter(BaseRelaxer):
                 torsions_sc=final_sc
             )
             
-            # Compute final energy per batch element
             poc_coords = state.pocket_atom_coords.to(device=device, dtype=torch.float32)
             poc_vdw = state.pocket_atom_vdw.to(device=device, dtype=torch.float32)
             lig_vdw = state.ligand_atom_vdw.to(device=device, dtype=torch.float32)

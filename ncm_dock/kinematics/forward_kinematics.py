@@ -252,16 +252,20 @@ def compute_dihedral_angle(
 def kabsch_rotation_matrix(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
     """
     Finds optimal SO(3) rotation matrix R aligning centered P to Q (P @ R^T ~= Q).
-    P, Q: [N, 3] centered
+    P, Q: [N, 3] centered. Strictly enforces float32 and disables autocast for CUDA SVD.
     """
-    H = torch.mm(P.transpose(-1, -2), Q)
-    U, S, Vh = torch.linalg.svd(H)
-    V = Vh.mH
-    R = torch.mm(V, U.transpose(-1, -2))
-    if torch.linalg.det(R) < 0:
-        V[:, -1] *= -1.0
+    dev_type = P.device.type
+    with torch.autocast(device_type=dev_type, enabled=False):
+        P_f32 = P.to(dtype=torch.float32)
+        Q_f32 = Q.to(dtype=torch.float32)
+        H = torch.mm(P_f32.transpose(-1, -2), Q_f32)
+        U, S, Vh = torch.linalg.svd(H)
+        V = Vh.mH
         R = torch.mm(V, U.transpose(-1, -2))
-    return R
+        if torch.linalg.det(R) < 0:
+            V[:, -1] *= -1.0
+            R = torch.mm(V, U.transpose(-1, -2))
+        return R.to(dtype=P.dtype)
 
 def extract_kinematic_params(
     ref_coords: torch.Tensor,

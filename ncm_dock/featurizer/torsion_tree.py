@@ -31,10 +31,21 @@ class KinematicTreeBuilder:
     def __init__(self):
         self.rot_smarts = ROTATABLE_SMARTS
 
-    def build_kinematic_tree(self, mol: Chem.Mol, conf_id: int = -1) -> LigandKinematicGraph:
+    def build_kinematic_tree(
+        self,
+        mol: Chem.Mol,
+        conf_id: int = -1,
+        generate_etkdg: bool = False
+    ) -> LigandKinematicGraph:
         """Analyze mol and build kinematic tree with zero in-place side effects."""
         mol = Chem.Mol(mol) # Deep copy
-        Chem.SanitizeMol(mol)
+        try:
+            Chem.SanitizeMol(mol)
+        except Exception:
+            try:
+                Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES)
+            except Exception:
+                pass
         
         # Heavy atom count
         heavy_atoms = [atom for atom in mol.GetAtoms() if atom.GetAtomicNum() > 1]
@@ -46,14 +57,30 @@ class KinematicTreeBuilder:
         mol_heavy = Chem.RemoveHs(mol)
         N = mol_heavy.GetNumAtoms()
         
-        # Ensure conformer exists
+        # Ensure conformer exists or generate fresh ETKDG conformer from 2D topology
+        if generate_etkdg:
+            mol_heavy.RemoveAllConformers()
+
         if mol_heavy.GetNumConformers() == 0:
+            mol_with_h = Chem.AddHs(mol_heavy)
             etkdg = AllChem.ETKDGv3()
             etkdg.randomSeed = 42
             etkdg.enforceChirality = True
-            res = AllChem.EmbedMolecule(mol_heavy, etkdg)
+            etkdg.maxIterations = 100
+            res = -1
+            try:
+                res = AllChem.EmbedMolecule(mol_with_h, etkdg)
+            except Exception:
+                res = -1
             if res != 0:
-                AllChem.EmbedMolecule(mol_heavy, randomSeed=42, enforceChirality=True)
+                try:
+                    res = AllChem.EmbedMolecule(mol_heavy, randomSeed=42, enforceChirality=False)
+                except Exception:
+                    res = -1
+            if mol_with_h.GetNumConformers() > 0:
+                mol_heavy = Chem.RemoveHs(mol_with_h)
+            elif mol_heavy.GetNumConformers() == 0:
+                raise ValueError("Failed to generate 3D conformer via ETKDGv3")
         conf = mol_heavy.GetConformer(conf_id)
         raw_coords = np.array([list(conf.GetAtomPosition(i)) for i in range(N)], dtype=np.float32)
         
@@ -207,7 +234,7 @@ class KinematicTreeBuilder:
             depths_t = torch.zeros(0, dtype=torch.long)
             
         # 5. Graph Automorphisms
-        auto_matches = mol_heavy.GetSubstructMatches(mol_heavy, uniquify=False)
+        auto_matches = mol_heavy.GetSubstructMatches(mol_heavy, uniquify=False, maxMatches=64)
         if len(auto_matches) == 0:
             auto_matches = [tuple(range(N))]
         perms_t = torch.tensor(auto_matches, dtype=torch.long)

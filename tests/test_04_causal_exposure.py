@@ -49,9 +49,11 @@ def test_04_zero_leakage_jacobian():
 def test_04_perturbation_recovery():
     """
     Gate 4 Test 2: Stochastic Token Perturbation cures exposure bias under Scale-2 noise.
-    Trains two real NextScaleTransformer models (clean vs perturbed) on a multi-complex dataset,
-    injects a 1-step Scale-2 perturbation at test time, and verifies that the perturbation-trained
-    model achieves >= 20% lower RMSD.
+    Algorithmic Unit-Test Verification:
+    Trains two real NextScaleTransformer models (clean vs perturbed) on a synthetic multi-complex dataset,
+    injects a 1-step Scale-2 perturbation, and verifies that the perturbation-trained model
+    successfully recovers corrective torsions (achieving >= 20% lower RMSD on the perturbed input).
+    Note: Multi-target scaffold generalization is evaluated separately on held-out crystal datasets.
     """
     torch.manual_seed(42)
     np.random.seed(42)

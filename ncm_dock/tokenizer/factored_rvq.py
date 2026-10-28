@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -26,6 +27,17 @@ def get_s3_lloyd_anchors():
     """Generates a deterministic 1024-point Uniform S^3 Lloyd covering for SO(3) rotations."""
     global _GLOBAL_S3_LLOYD_CACHE
     if _GLOBAL_S3_LLOYD_CACHE is None:
+        cache_path = os.path.join(os.path.dirname(__file__), "..", "..", "checkpoints", "s3_lloyd_anchors.pt")
+        alt_cache_path = r"E:\ResQ-Dock-Data\s3_lloyd_anchors.pt"
+        for p in [cache_path, alt_cache_path]:
+            if os.path.exists(p):
+                try:
+                    data = torch.load(p, map_location="cpu", weights_only=True)
+                    _GLOBAL_S3_LLOYD_CACHE = (data["R_lloyd"], data["r6d_lloyd"])
+                    return _GLOBAL_S3_LLOYD_CACHE
+                except Exception:
+                    pass
+
         torch.manual_seed(42)
         N_samples = 100000
         samples = torch.randn(N_samples, 4)
@@ -58,6 +70,12 @@ def get_s3_lloyd_anchors():
         ], dim=-2)
         r6d_lloyd = matrix_to_rotation_6d(R_lloyd)
         _GLOBAL_S3_LLOYD_CACHE = (R_lloyd, r6d_lloyd)
+        try:
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            torch.save({"R_lloyd": R_lloyd, "r6d_lloyd": r6d_lloyd}, cache_path)
+            torch.save({"R_lloyd": R_lloyd, "r6d_lloyd": r6d_lloyd}, alt_cache_path)
+        except Exception:
+            pass
     return _GLOBAL_S3_LLOYD_CACHE
 
 class FactoredKinematicRVQ(nn.Module, PoseTokenizerProtocol):

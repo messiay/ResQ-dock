@@ -196,12 +196,29 @@ def build_complex_state_from_umf(
     raw = decode_umf_via_bridge(umf_path, upf_python, upf_root)
 
     raw_coords_np = np.array(raw["ligand_coords"], dtype=np.float32)
-    lig_x = raw["ligand_x"]
-    lig_edges = np.array(raw["ligand_edges"], dtype=np.int64)
+    lig_x_all = raw["ligand_x"]
+    lig_edges_all = np.array(raw["ligand_edges"], dtype=np.int64)
+
+    # Filter out hydrogens (Z <= 1) to match heavy-atom kinematic tree
+    heavy_idx = [i for i, z in enumerate(lig_x_all) if z > 1]
+    if len(heavy_idx) == 0:
+        raise ValueError(f"No heavy ligand atoms in {umf_path}")
+
+    raw_coords_np = raw_coords_np[heavy_idx]
+    orig_to_heavy = {old_i: new_i for new_i, old_i in enumerate(heavy_idx)}
+    lig_x = [lig_x_all[i] for i in heavy_idx]
     N_raw = len(lig_x)
 
-    if N_raw == 0 or len(raw_coords_np) == 0:
-        raise ValueError(f"No ligand coordinates in {umf_path}")
+    remapped_edges = []
+    if lig_edges_all.shape[0] == 2 and lig_edges_all.shape[1] > 0:
+        for i in range(lig_edges_all.shape[1]):
+            u, v = int(lig_edges_all[0, i]), int(lig_edges_all[1, i])
+            if u in orig_to_heavy and v in orig_to_heavy:
+                remapped_edges.append([orig_to_heavy[u], orig_to_heavy[v]])
+    if remapped_edges:
+        lig_edges = np.array(remapped_edges, dtype=np.int64).T
+    else:
+        lig_edges = np.zeros((2, 0), dtype=np.int64)
 
     # 1. Build initial ligand molecule from atomic numbers and bonds to identify largest connected organic component
     mol = Chem.RWMol()
@@ -343,12 +360,15 @@ def build_complex_state_from_umf(
     # 4. Reference conformer generation with enforceChirality=True
     ref_mol = Chem.Mol(mol_heavy)
     ref_mol.RemoveAllConformers()
-    etkdg = AllChem.ETKDGv3()
-    etkdg.randomSeed = 42
-    etkdg.enforceChirality = True
-    status = AllChem.EmbedMolecule(ref_mol, etkdg)
-    if status != 0:
-        AllChem.EmbedMolecule(ref_mol, randomSeed=42, enforceChirality=True)
+    try:
+        etkdg = AllChem.ETKDGv3()
+        etkdg.randomSeed = 42
+        etkdg.enforceChirality = True
+        status = AllChem.EmbedMolecule(ref_mol, etkdg)
+        if status != 0:
+            AllChem.EmbedMolecule(ref_mol, randomSeed=42, enforceChirality=True)
+    except Exception:
+        pass
     if ref_mol.GetNumConformers() == 0:
         # If embedding fails completely, use the heavy conformer as reference base
         ref_mol.AddConformer(conf, assignId=True)

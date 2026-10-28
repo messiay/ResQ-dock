@@ -19,6 +19,7 @@ def symmetry_aware_squared_loss(
         
     B, N, _ = pred_coords.shape
     device = pred_coords.device
+    target_coords = target_coords.to(device=device, dtype=pred_coords.dtype)
     perms = automorphism_perms.to(device=device, dtype=torch.long)
     N_sym = perms.shape[0]
     

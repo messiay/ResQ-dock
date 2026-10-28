@@ -33,11 +33,13 @@ class ComplexPrecomputer:
         self,
         max_pocket_residues: int = 64,
         max_pocket_atoms: int = 400,
+        max_ligand_atoms: int = 100,
         pocket_crop_radius: float = 10.0,
         grid_dim: int = 32
     ):
         self.max_pocket_residues = max_pocket_residues
         self.max_pocket_atoms = max_pocket_atoms
+        self.max_ligand_atoms = max_ligand_atoms
         self.pocket_crop_radius = pocket_crop_radius
         self.canonicalizer = PocketCanonicalizer()
         self.tree_builder = KinematicTreeBuilder()
@@ -76,6 +78,11 @@ class ComplexPrecomputer:
             raise ValueError(f"Failed to load ligand from {lig_p}")
             
         mol_heavy = Chem.RemoveHs(mol)
+        if mol_heavy.GetNumAtoms() > self.max_ligand_atoms:
+            raise ValueError(f"Ligand exceeds maximum heavy atom cap of {self.max_ligand_atoms} ({mol_heavy.GetNumAtoms()} atoms)")
+        if mol_heavy.GetNumAtoms() < 3:
+            raise ValueError(f"Ligand has fewer than 3 heavy atoms ({mol_heavy.GetNumAtoms()} atoms)")
+
         conf = mol_heavy.GetConformer()
         target_coords_global = torch.tensor(
             [[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y, conf.GetAtomPosition(i).z] 
@@ -154,7 +161,8 @@ class ComplexPrecomputer:
         canon_lig_coords = self.canonicalizer.to_canonical(target_coords_global, tf)
         
         # 4. Ligand Kinematic Graph & Inverse Parameter Extraction
-        lig_graph = self.tree_builder.build_kinematic_tree(mol_heavy)
+        # Strictly generate fresh ETKDG reference conformer from 2D topology (never reuse crystal conformer)
+        lig_graph = self.tree_builder.build_kinematic_tree(mol_heavy, generate_etkdg=True)
         gt_T, gt_r6d, gt_torsions_sc = extract_kinematic_params(
             ref_coords=lig_graph.ref_coords,
             target_coords=canon_lig_coords,

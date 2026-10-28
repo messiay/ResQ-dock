@@ -1,0 +1,78 @@
+{
+  "small_molecules": [
+    {
+      "cid": "1il5",
+      "description": "IL-1R Antagonist (Anti-inflammatory)",
+      "pocket_dist_to_crystal": 25.37213706970215,
+      "blind_rmsd": 24.79014778137207,
+      "free_energy": 3504.047607421875,
+      "latency_ms": 6696.521000005305
+    },
+    {
+      "cid": "1k6v",
+      "description": "CDK2 Kinase ATP Inhibitor (Cancer)",
+      "pocket_dist_to_crystal": 14.996036529541016,
+      "blind_rmsd": 18.136032104492188,
+      "free_energy": 12140.1279296875,
+      "latency_ms": 35142.9630999919
+    },
+    {
+      "cid": "1mcz",
+      "description": "Factor Xa Anticoagulant (Cardiovascular)",
+      "pocket_dist_to_crystal": 20.284412384033203,
+      "blind_rmsd": 21.94244956970215,
+      "free_energy": 4114.52099609375,
+      "latency_ms": 11093.903200002387
+    }
+  ],
+  "protacs_and_flexible": [
+    {
+      "cid": "5t35",
+      "description": "MZ1 PROTAC (BRD4-VHL Degrader)",
+      "rotatable_bonds": 20,
+      "ncm_rmsd": 11.762983322143555,
+      "vina_rmsd": 25.0,
+      "winner": "ResQ-Dock",
+      "ncm_pb": "INT",
+      "vina_pb": "FAIL",
+      "ncm_latency_ms": 21709.129499970004,
+      "vina_latency_s": 90.0
+    },
+    {
+      "cid": "6hax",
+      "description": "VHL E3 Ligase PROTAC Degrader",
+      "rotatable_bonds": 15,
+      "ncm_rmsd": 8.727444648742676,
+      "vina_rmsd": 25.0,
+      "winner": "ResQ-Dock",
+      "ncm_pb": "INT",
+      "vina_pb": "FAIL",
+      "ncm_latency_ms": 17701.62639999762,
+      "vina_latency_s": 90.0
+    },
+    {
+      "cid": "1bai",
+      "description": "High-Flexibility Collagenase Peptidomimetic",
+      "rotatable_bonds": 16,
+      "ncm_rmsd": 13.205453872680664,
+      "vina_rmsd": 25.0,
+      "winner": "ResQ-Dock",
+      "ncm_pb": "FAIL",
+      "vina_pb": "FAIL",
+      "ncm_latency_ms": 30520.55209991522,
+      "vina_latency_s": 90.0
+    },
+    {
+      "cid": "1ex8",
+      "description": "Flexible Phospholipid-Mimic Inhibitor",
+      "rotatable_bonds": 14,
+      "ncm_rmsd": 5.956909656524658,
+      "vina_rmsd": 25.0,
+      "winner": "ResQ-Dock",
+      "ncm_pb": "FAIL",
+      "vina_pb": "FAIL",
+      "ncm_latency_ms": 12969.30410002824,
+      "vina_latency_s": 90.0
+    }
+  ]
+}

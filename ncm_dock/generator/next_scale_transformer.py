@@ -64,7 +64,8 @@ class NextScaleTransformer(nn.Module):
         k_s2b: int = 1024,
         k_tor: int = 1025,  # 0..1023 torsions, 1024 RIGID_BYPASS
         d_pocket_node: int = 1280,  # ESM-2 650M embedding dim or precomputed node feats
-        d_ligand_node: int = 64
+        d_ligand_node: int = 64,
+        use_elec_grid: bool = False
     ):
         super().__init__()
         self.d_model = d_model
@@ -75,6 +76,7 @@ class NextScaleTransformer(nn.Module):
         self.k_s2a = k_s2a
         self.k_s2b = k_s2b
         self.k_tor = k_tor
+        self.use_elec_grid = use_elec_grid
 
         # Token embeddings
         self.emb_s1 = nn.Embedding(k_s1, d_model)
@@ -89,6 +91,12 @@ class NextScaleTransformer(nn.Module):
         # Context feature projections
         self.pocket_proj = nn.Linear(d_pocket_node, d_model)
         self.ligand_proj = nn.Linear(d_ligand_node, d_model)
+
+        # Optional FreeSolvE 3D FFT Poisson electrostatic grid projection & spatial voxel embeddings
+        if self.use_elec_grid:
+            self.elec_proj = nn.Linear(1, d_model)
+            self.elec_norm = nn.LayerNorm(d_model)
+            self.elec_pos_emb = nn.Parameter(torch.randn(64, d_model) * 0.02)
 
         # Learnable scale queries for autoregressive generation
         self.scale_queries = nn.Parameter(torch.randn(11, d_model) * 0.02)
@@ -107,8 +115,18 @@ class NextScaleTransformer(nn.Module):
         self.head_s3 = nn.Linear(d_model, k_tor)
         self.head_s4 = nn.Linear(d_model, k_tor)
 
-    def build_context_embeddings(self, state: CanonicalComplexState) -> torch.Tensor:
-        """Projects pocket residues and ligand graph into conditioning context tokens [B, L_ctx, D]."""
+    def build_context_embeddings(
+        self,
+        state: CanonicalComplexState,
+        modality_dropout: bool = False,
+        p_poc_drop: float = 0.15,
+        p_elec_drop: float = 0.15,
+        p_lig_drop: float = 0.05
+    ) -> torch.Tensor:
+        """
+        Projects pocket residues, ligand graph, and FreeSolvE 3D FFT Poisson electrostatics into conditioning context.
+        Applies Modality Dropout during training to prevent lazy neural shortcuts and force balanced multimodal attention.
+        """
         device = next(self.parameters()).device
         poc_feats = state.pocket_node_feats.to(device)
         lig_feats = state.ligand_atom_feats.to(device)
@@ -133,6 +151,51 @@ class NextScaleTransformer(nn.Module):
         else:
             lig_toks = self.ligand_proj(lig_feats)
 
+        elec_toks = None
+        if getattr(self, "use_elec_grid", False):
+            if state.freesolve_fft_grid is not None:
+                grid = state.freesolve_fft_grid.to(device=device, dtype=torch.float32)
+                # Instance standardization: normalize physical potential (mean=0, std=1.0)
+                # to match the unit variance magnitude of pocket node embeddings
+                grid_std = torch.clamp(grid.std(), min=1e-5)
+                grid_norm = (grid - grid.mean()) / grid_std
+                if grid_norm.dim() == 3:
+                    grid_norm = grid_norm.unsqueeze(0).unsqueeze(0)  # [1, 1, G, G, G]
+                elif grid_norm.dim() == 4:
+                    grid_norm = grid_norm.unsqueeze(0)
+                # Adaptive 3D pooling to 4x4x4 = 64 spatial cells
+                pooled = F.adaptive_avg_pool3d(grid_norm, (4, 4, 4)) # [1, 1, 4, 4, 4]
+                elec_in = pooled.reshape(1, 64, 1)                  # [1, 64, 1]
+                proj_out = self.elec_proj(elec_in)
+                if hasattr(self, "elec_norm"):
+                    proj_out = self.elec_norm(proj_out)
+                elec_toks = proj_out + self.elec_pos_emb.unsqueeze(0)
+            else:
+                zero_in = torch.zeros((1, 64, 1), device=device, dtype=torch.float32)
+                proj_out = self.elec_proj(zero_in)
+                if hasattr(self, "elec_norm"):
+                    proj_out = self.elec_norm(proj_out)
+                elec_toks = proj_out + self.elec_pos_emb.unsqueeze(0)
+
+        # Modality Dropout (Active during training to eliminate lazy neural shortcuts)
+        if modality_dropout and self.training:
+            poc_drop = (torch.rand(1).item() < p_poc_drop)
+            elec_drop = (torch.rand(1).item() < p_elec_drop) if elec_toks is not None else False
+            lig_drop = (torch.rand(1).item() < p_lig_drop)
+
+            # Safeguard: ensure cavity spatial representation is never 100% blind
+            if poc_drop and elec_drop:
+                elec_drop = False
+
+            if poc_drop:
+                poc_toks = torch.zeros_like(poc_toks)
+            if elec_drop and elec_toks is not None:
+                elec_toks = torch.zeros_like(elec_toks)
+            if lig_drop:
+                lig_toks = torch.zeros_like(lig_toks)
+
+        if elec_toks is not None:
+            return torch.cat([poc_toks, lig_toks, elec_toks], dim=1)
         return torch.cat([poc_toks, lig_toks], dim=1)
 
     def embed_tokens(self, tokens: DiscretePoseTokens) -> torch.Tensor:
@@ -213,12 +276,14 @@ class NextScaleTransformer(nn.Module):
         self,
         state: CanonicalComplexState,
         tokens: DiscretePoseTokens,
-        perturb: bool = False
+        perturb: bool = False,
+        modality_dropout: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass with optional stochastic token perturbation (p=0.25).
+        Forward pass with optional stochastic token perturbation (p=0.25)
+        and optional modality dropout during training.
         """
-        ctx_emb = self.build_context_embeddings(state)
+        ctx_emb = self.build_context_embeddings(state, modality_dropout=modality_dropout)
 
         if perturb and self.training and torch.rand(1).item() < self.p_perturb:
             # Perturb Scale 1 & 2 tokens by small integer offsets in codebook

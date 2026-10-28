@@ -1,0 +1,562 @@
+[
+  {
+    "complex_id": "1qan",
+    "baseline_rmsd": 4.859462738037109,
+    "token_entropies": {
+      "s1_coarse_trans": 0.3766424059867859,
+      "s2a_fine_trans": 5.537325859069824,
+      "s2b_rotation": 5.974151611328125,
+      "s3_core_torsions": 2.5276103019714355,
+      "s4_fine_rotamers": 4.221423149108887
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 4.859462738037109,
+      "No_Pocket_Shape": 11.734807014465332,
+      "Rigid_Ligand_Only": 5.226077556610107,
+      "Oracle_Translation": 3.9813332557678223,
+      "Oracle_Rotation": 3.926711082458496,
+      "Oracle_Rigid_Body": 3.393352508544922,
+      "Oracle_Core_Torsions": 4.967865943908691,
+      "All_Oracles_Identity": 1.265431523323059
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 0.8781294822692871,
+      "delta_rotation": 0.9327516555786133,
+      "delta_rigid_body": 1.4661102294921875,
+      "delta_core_torsions": -0.10840320587158203
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1e6s",
+    "baseline_rmsd": 2.5595011711120605,
+    "token_entropies": {
+      "s1_coarse_trans": 0.06153551861643791,
+      "s2a_fine_trans": 1.0298471450805664,
+      "s2b_rotation": 6.432689666748047,
+      "s3_core_torsions": 4.438775539398193,
+      "s4_fine_rotamers": 4.54098653793335
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 2.5595011711120605,
+      "No_Pocket_Shape": 10.294842720031738,
+      "Rigid_Ligand_Only": 2.606778144836426,
+      "Oracle_Translation": 3.1815874576568604,
+      "Oracle_Rotation": 2.2527778148651123,
+      "Oracle_Rigid_Body": 1.7434437274932861,
+      "Oracle_Core_Torsions": 2.8103926181793213,
+      "All_Oracles_Identity": 1.5757837295532227
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -0.6220862865447998,
+      "delta_rotation": 0.30672335624694824,
+      "delta_rigid_body": 0.8160574436187744,
+      "delta_core_torsions": -0.25089144706726074
+    },
+    "primary_failure_mode": "Coupled Kinematic Drift"
+  },
+  {
+    "complex_id": "1il5",
+    "baseline_rmsd": 5.1152024269104,
+    "token_entropies": {
+      "s1_coarse_trans": 0.7392070293426514,
+      "s2a_fine_trans": 5.5110979080200195,
+      "s2b_rotation": 6.443836212158203,
+      "s3_core_torsions": 3.6175947189331055,
+      "s4_fine_rotamers": 4.036924362182617
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 5.1152024269104,
+      "No_Pocket_Shape": 10.817561149597168,
+      "Rigid_Ligand_Only": 5.1152024269104,
+      "Oracle_Translation": 3.212890863418579,
+      "Oracle_Rotation": 4.995847702026367,
+      "Oracle_Rigid_Body": 1.2390382289886475,
+      "Oracle_Core_Torsions": 5.1152024269104,
+      "All_Oracles_Identity": 1.2390382289886475
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 1.9023115634918213,
+      "delta_rotation": 0.1193547248840332,
+      "delta_rigid_body": 3.876164197921753,
+      "delta_core_torsions": 0.0
+    },
+    "primary_failure_mode": "Translation (Cavity Placement)"
+  },
+  {
+    "complex_id": "1njj",
+    "baseline_rmsd": 14.83437442779541,
+    "token_entropies": {
+      "s1_coarse_trans": 2.199154853820801,
+      "s2a_fine_trans": 2.84515643119812,
+      "s2b_rotation": 5.43675422668457,
+      "s3_core_torsions": 2.11802339553833,
+      "s4_fine_rotamers": 4.402656555175781
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 14.83437442779541,
+      "No_Pocket_Shape": 6.8744025230407715,
+      "Rigid_Ligand_Only": 14.432132720947266,
+      "Oracle_Translation": 7.746838092803955,
+      "Oracle_Rotation": 14.227033615112305,
+      "Oracle_Rigid_Body": 4.044801712036133,
+      "Oracle_Core_Torsions": 14.463911056518555,
+      "All_Oracles_Identity": 2.0429763793945312
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 7.087536334991455,
+      "delta_rotation": 0.6073408126831055,
+      "delta_rigid_body": 10.789572715759277,
+      "delta_core_torsions": 0.37046337127685547
+    },
+    "primary_failure_mode": "Translation (Cavity Placement)"
+  },
+  {
+    "complex_id": "1lqe",
+    "baseline_rmsd": 5.575370788574219,
+    "token_entropies": {
+      "s1_coarse_trans": 0.010301190428435802,
+      "s2a_fine_trans": 2.2286529541015625,
+      "s2b_rotation": 5.016044616699219,
+      "s3_core_torsions": 1.2309978008270264,
+      "s4_fine_rotamers": 4.475801467895508
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 5.575370788574219,
+      "No_Pocket_Shape": 9.962669372558594,
+      "Rigid_Ligand_Only": 5.595419883728027,
+      "Oracle_Translation": 5.717939376831055,
+      "Oracle_Rotation": 2.294511318206787,
+      "Oracle_Rigid_Body": 5.8645806312561035,
+      "Oracle_Core_Torsions": 5.677584171295166,
+      "All_Oracles_Identity": 1.7346824407577515
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -0.14256858825683594,
+      "delta_rotation": 3.2808594703674316,
+      "delta_rigid_body": -0.28920984268188477,
+      "delta_core_torsions": -0.10221338272094727
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1fhr",
+    "baseline_rmsd": 4.528726577758789,
+    "token_entropies": {
+      "s1_coarse_trans": 1.7105400562286377,
+      "s2a_fine_trans": 3.618464231491089,
+      "s2b_rotation": 5.453967094421387,
+      "s3_core_torsions": 2.4876675605773926,
+      "s4_fine_rotamers": 3.3560028076171875
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 4.528726577758789,
+      "No_Pocket_Shape": 12.246602058410645,
+      "Rigid_Ligand_Only": 4.6750030517578125,
+      "Oracle_Translation": 13.153907775878906,
+      "Oracle_Rotation": 4.749741077423096,
+      "Oracle_Rigid_Body": 2.9359617233276367,
+      "Oracle_Core_Torsions": 5.748357772827148,
+      "All_Oracles_Identity": 2.1287636756896973
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -8.625181198120117,
+      "delta_rotation": -0.22101449966430664,
+      "delta_rigid_body": 1.5927648544311523,
+      "delta_core_torsions": -1.2196311950683594
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1czo",
+    "baseline_rmsd": 3.52887225151062,
+    "token_entropies": {
+      "s1_coarse_trans": 0.0436258465051651,
+      "s2a_fine_trans": 3.169715642929077,
+      "s2b_rotation": 2.5215072631835938,
+      "s3_core_torsions": 5.711137771606445,
+      "s4_fine_rotamers": 5.666320323944092
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 3.52887225151062,
+      "No_Pocket_Shape": 4.859728813171387,
+      "Rigid_Ligand_Only": 2.9336142539978027,
+      "Oracle_Translation": 3.2943198680877686,
+      "Oracle_Rotation": 3.2866430282592773,
+      "Oracle_Rigid_Body": 2.7697367668151855,
+      "Oracle_Core_Torsions": 2.814499855041504,
+      "All_Oracles_Identity": 2.0323681831359863
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 0.23455238342285156,
+      "delta_rotation": 0.24222922325134277,
+      "delta_rigid_body": 0.7591354846954346,
+      "delta_core_torsions": 0.7143723964691162
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1mcz",
+    "baseline_rmsd": 5.538025379180908,
+    "token_entropies": {
+      "s1_coarse_trans": 0.3108067512512207,
+      "s2a_fine_trans": 2.865602970123291,
+      "s2b_rotation": 7.502383232116699,
+      "s3_core_torsions": 4.408768177032471,
+      "s4_fine_rotamers": 5.351187705993652
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 5.538025379180908,
+      "No_Pocket_Shape": 9.366270065307617,
+      "Rigid_Ligand_Only": 5.539849758148193,
+      "Oracle_Translation": 3.045987844467163,
+      "Oracle_Rotation": 3.9327855110168457,
+      "Oracle_Rigid_Body": 1.6825779676437378,
+      "Oracle_Core_Torsions": 5.627500057220459,
+      "All_Oracles_Identity": 1.6209666728973389
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 2.492037534713745,
+      "delta_rotation": 1.6052398681640625,
+      "delta_rigid_body": 3.8554474115371704,
+      "delta_core_torsions": -0.08947467803955078
+    },
+    "primary_failure_mode": "Translation (Cavity Placement)"
+  },
+  {
+    "complex_id": "1k6v",
+    "baseline_rmsd": 2.429487705230713,
+    "token_entropies": {
+      "s1_coarse_trans": 0.22403031587600708,
+      "s2a_fine_trans": 4.3129377365112305,
+      "s2b_rotation": 4.465701103210449,
+      "s3_core_torsions": 2.1376233100891113,
+      "s4_fine_rotamers": 4.085611820220947
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 2.429487705230713,
+      "No_Pocket_Shape": 8.270322799682617,
+      "Rigid_Ligand_Only": 2.171041488647461,
+      "Oracle_Translation": 9.466439247131348,
+      "Oracle_Rotation": 2.429487705230713,
+      "Oracle_Rigid_Body": 2.0219810009002686,
+      "Oracle_Core_Torsions": 2.335660934448242,
+      "All_Oracles_Identity": 1.997448205947876
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -7.036951541900635,
+      "delta_rotation": 0.0,
+      "delta_rigid_body": 0.40750670433044434,
+      "delta_core_torsions": 0.0938267707824707
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1ocq",
+    "baseline_rmsd": 6.844959735870361,
+    "token_entropies": {
+      "s1_coarse_trans": 0.16757138073444366,
+      "s2a_fine_trans": 2.699214458465576,
+      "s2b_rotation": 6.278327465057373,
+      "s3_core_torsions": 2.3913450241088867,
+      "s4_fine_rotamers": 5.374919891357422
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 6.844959735870361,
+      "No_Pocket_Shape": 6.247292995452881,
+      "Rigid_Ligand_Only": 6.849632263183594,
+      "Oracle_Translation": 5.779940605163574,
+      "Oracle_Rotation": 5.528131008148193,
+      "Oracle_Rigid_Body": 2.2989768981933594,
+      "Oracle_Core_Torsions": 6.882966995239258,
+      "All_Oracles_Identity": 2.1675209999084473
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 1.065019130706787,
+      "delta_rotation": 1.316828727722168,
+      "delta_rigid_body": 4.545982837677002,
+      "delta_core_torsions": -0.038007259368896484
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1c3r",
+    "baseline_rmsd": 6.105293273925781,
+    "token_entropies": {
+      "s1_coarse_trans": 0.25371360778808594,
+      "s2a_fine_trans": 4.862643241882324,
+      "s2b_rotation": 4.765644073486328,
+      "s3_core_torsions": 4.351959228515625,
+      "s4_fine_rotamers": 4.366148948669434
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 6.105293273925781,
+      "No_Pocket_Shape": 7.894443035125732,
+      "Rigid_Ligand_Only": 5.468636989593506,
+      "Oracle_Translation": 5.232823848724365,
+      "Oracle_Rotation": 4.494558334350586,
+      "Oracle_Rigid_Body": 3.2609703540802,
+      "Oracle_Core_Torsions": 4.6293864250183105,
+      "All_Oracles_Identity": 1.3808988332748413
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 0.872469425201416,
+      "delta_rotation": 1.6107349395751953,
+      "delta_rigid_body": 2.844322919845581,
+      "delta_core_torsions": 1.4759068489074707
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1c29",
+    "baseline_rmsd": 3.5877130031585693,
+    "token_entropies": {
+      "s1_coarse_trans": 0.000543244881555438,
+      "s2a_fine_trans": 1.1816178560256958,
+      "s2b_rotation": 2.06708025932312,
+      "s3_core_torsions": 4.203856468200684,
+      "s4_fine_rotamers": 4.914431095123291
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 3.5877130031585693,
+      "No_Pocket_Shape": 8.89595890045166,
+      "Rigid_Ligand_Only": 3.759751558303833,
+      "Oracle_Translation": 4.311675071716309,
+      "Oracle_Rotation": 3.152209997177124,
+      "Oracle_Rigid_Body": 3.2264370918273926,
+      "Oracle_Core_Torsions": 3.5158591270446777,
+      "All_Oracles_Identity": 1.7562389373779297
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -0.7239620685577393,
+      "delta_rotation": 0.4355030059814453,
+      "delta_rigid_body": 0.36127591133117676,
+      "delta_core_torsions": 0.0718538761138916
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1qin",
+    "baseline_rmsd": 9.198058128356934,
+    "token_entropies": {
+      "s1_coarse_trans": 2.4689297676086426,
+      "s2a_fine_trans": 0.26084598898887634,
+      "s2b_rotation": 2.500420093536377,
+      "s3_core_torsions": 2.558945894241333,
+      "s4_fine_rotamers": 3.1246542930603027
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 9.198058128356934,
+      "No_Pocket_Shape": 9.29283332824707,
+      "Rigid_Ligand_Only": 8.71557331085205,
+      "Oracle_Translation": 6.992384433746338,
+      "Oracle_Rotation": 4.2586565017700195,
+      "Oracle_Rigid_Body": 2.4216387271881104,
+      "Oracle_Core_Torsions": 7.83538293838501,
+      "All_Oracles_Identity": 2.1368319988250732
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 2.2056736946105957,
+      "delta_rotation": 4.939401626586914,
+      "delta_rigid_body": 6.776419401168823,
+      "delta_core_torsions": 1.3626751899719238
+    },
+    "primary_failure_mode": "Orientation (SO(3) Flip)"
+  },
+  {
+    "complex_id": "1lxf",
+    "baseline_rmsd": 6.384304523468018,
+    "token_entropies": {
+      "s1_coarse_trans": 0.09208006411790848,
+      "s2a_fine_trans": 1.8669219017028809,
+      "s2b_rotation": 3.1748993396759033,
+      "s3_core_torsions": 2.7375240325927734,
+      "s4_fine_rotamers": 4.589532375335693
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 6.384304523468018,
+      "No_Pocket_Shape": 6.954834938049316,
+      "Rigid_Ligand_Only": 6.170060634613037,
+      "Oracle_Translation": 6.328277111053467,
+      "Oracle_Rotation": 5.056979656219482,
+      "Oracle_Rigid_Body": 1.5972206592559814,
+      "Oracle_Core_Torsions": 6.443248271942139,
+      "All_Oracles_Identity": 1.2169392108917236
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 0.05602741241455078,
+      "delta_rotation": 1.3273248672485352,
+      "delta_rigid_body": 4.787083864212036,
+      "delta_core_torsions": -0.058943748474121094
+    },
+    "primary_failure_mode": "Coupled Kinematic Drift"
+  },
+  {
+    "complex_id": "1qca",
+    "baseline_rmsd": 6.401939392089844,
+    "token_entropies": {
+      "s1_coarse_trans": 1.7365741729736328,
+      "s2a_fine_trans": 3.8856520652770996,
+      "s2b_rotation": 6.589852333068848,
+      "s3_core_torsions": 1.9280093908309937,
+      "s4_fine_rotamers": 4.37174129486084
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 6.401939392089844,
+      "No_Pocket_Shape": 12.639979362487793,
+      "Rigid_Ligand_Only": 6.55451774597168,
+      "Oracle_Translation": 4.186894416809082,
+      "Oracle_Rotation": 2.509716749191284,
+      "Oracle_Rigid_Body": 2.4132299423217773,
+      "Oracle_Core_Torsions": 6.905386447906494,
+      "All_Oracles_Identity": 1.4735971689224243
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 2.2150449752807617,
+      "delta_rotation": 3.8922226428985596,
+      "delta_rigid_body": 3.9887094497680664,
+      "delta_core_torsions": -0.5034470558166504
+    },
+    "primary_failure_mode": "Orientation (SO(3) Flip)"
+  },
+  {
+    "complex_id": "1b3h",
+    "baseline_rmsd": 7.256888389587402,
+    "token_entropies": {
+      "s1_coarse_trans": 0.002657368779182434,
+      "s2a_fine_trans": 3.371662139892578,
+      "s2b_rotation": 3.4183695316314697,
+      "s3_core_torsions": 4.606500625610352,
+      "s4_fine_rotamers": 6.307566165924072
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 7.256888389587402,
+      "No_Pocket_Shape": 9.517321586608887,
+      "Rigid_Ligand_Only": 8.661571502685547,
+      "Oracle_Translation": 4.59063720703125,
+      "Oracle_Rotation": 4.5610833168029785,
+      "Oracle_Rigid_Body": 3.5425400733947754,
+      "Oracle_Core_Torsions": 8.48058032989502,
+      "All_Oracles_Identity": 1.942571997642517
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 2.6662511825561523,
+      "delta_rotation": 2.695805072784424,
+      "delta_rigid_body": 3.714348316192627,
+      "delta_core_torsions": -1.2236919403076172
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1rs2",
+    "baseline_rmsd": 4.373447895050049,
+    "token_entropies": {
+      "s1_coarse_trans": 0.1710296869277954,
+      "s2a_fine_trans": 2.503978729248047,
+      "s2b_rotation": 4.286046981811523,
+      "s3_core_torsions": 3.7138400077819824,
+      "s4_fine_rotamers": 4.6417083740234375
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 4.373447895050049,
+      "No_Pocket_Shape": 5.55641508102417,
+      "Rigid_Ligand_Only": 4.373447895050049,
+      "Oracle_Translation": 4.541889190673828,
+      "Oracle_Rotation": 2.8978419303894043,
+      "Oracle_Rigid_Body": 1.711504340171814,
+      "Oracle_Core_Torsions": 4.373447895050049,
+      "All_Oracles_Identity": 1.711504340171814
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -0.1684412956237793,
+      "delta_rotation": 1.4756059646606445,
+      "delta_rigid_body": 2.661943554878235,
+      "delta_core_torsions": 0.0
+    },
+    "primary_failure_mode": "Coupled Kinematic Drift"
+  },
+  {
+    "complex_id": "1kfy",
+    "baseline_rmsd": 5.7964768409729,
+    "token_entropies": {
+      "s1_coarse_trans": 0.6277744770050049,
+      "s2a_fine_trans": 2.229530096054077,
+      "s2b_rotation": 5.702871322631836,
+      "s3_core_torsions": 3.4690284729003906,
+      "s4_fine_rotamers": 4.772823333740234
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 5.7964768409729,
+      "No_Pocket_Shape": 9.638177871704102,
+      "Rigid_Ligand_Only": 5.8759355545043945,
+      "Oracle_Translation": 3.9280829429626465,
+      "Oracle_Rotation": 2.562490701675415,
+      "Oracle_Rigid_Body": 3.458387613296509,
+      "Oracle_Core_Torsions": 5.915048122406006,
+      "All_Oracles_Identity": 1.601889967918396
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 1.868393898010254,
+      "delta_rotation": 3.2339861392974854,
+      "delta_rigid_body": 2.3380892276763916,
+      "delta_core_torsions": -0.11857128143310547
+    },
+    "primary_failure_mode": "Torsion (Rotamer Strain)"
+  },
+  {
+    "complex_id": "1px4",
+    "baseline_rmsd": 4.967813491821289,
+    "token_entropies": {
+      "s1_coarse_trans": 0.003463961649686098,
+      "s2a_fine_trans": 4.428378105163574,
+      "s2b_rotation": 5.293730735778809,
+      "s3_core_torsions": 3.8613662719726562,
+      "s4_fine_rotamers": 5.290031433105469
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 4.967813491821289,
+      "No_Pocket_Shape": 10.332297325134277,
+      "Rigid_Ligand_Only": 4.808504104614258,
+      "Oracle_Translation": 3.924297332763672,
+      "Oracle_Rotation": 4.093709945678711,
+      "Oracle_Rigid_Body": 1.7557333707809448,
+      "Oracle_Core_Torsions": 4.72815465927124,
+      "All_Oracles_Identity": 1.464351773262024
+    },
+    "counterfactual_deltas": {
+      "delta_translation": 1.0435161590576172,
+      "delta_rotation": 0.8741035461425781,
+      "delta_rigid_body": 3.2120801210403442,
+      "delta_core_torsions": 0.23965883255004883
+    },
+    "primary_failure_mode": "Coupled Kinematic Drift"
+  },
+  {
+    "complex_id": "1bai",
+    "baseline_rmsd": 10.933821678161621,
+    "token_entropies": {
+      "s1_coarse_trans": 0.9694690704345703,
+      "s2a_fine_trans": 3.0801360607147217,
+      "s2b_rotation": 6.107428073883057,
+      "s3_core_torsions": 1.8088657855987549,
+      "s4_fine_rotamers": 3.825968027114868
+    },
+    "ablation_rmsds": {
+      "No_Electrostatics": 10.933821678161621,
+      "No_Pocket_Shape": 14.343439102172852,
+      "Rigid_Ligand_Only": 11.156174659729004,
+      "Oracle_Translation": 10.939841270446777,
+      "Oracle_Rotation": 2.947268009185791,
+      "Oracle_Rigid_Body": 3.726719617843628,
+      "Oracle_Core_Torsions": 10.421161651611328,
+      "All_Oracles_Identity": 2.008496046066284
+    },
+    "counterfactual_deltas": {
+      "delta_translation": -0.00601959228515625,
+      "delta_rotation": 7.98655366897583,
+      "delta_rigid_body": 7.207102060317993,
+      "delta_core_torsions": 0.512660026550293
+    },
+    "primary_failure_mode": "Orientation (SO(3) Flip)"
+  }
+]

@@ -230,7 +230,6 @@ def main():
     print("="*50)
     
     tokenizer = FactoredKinematicRVQ().to(device)
-    tokenizer.init_from_dataset(train_set)
     stage1_ckpt_path = os.path.join(args.save_dir, "stage1_rvq.pt")
     if not args.overwrite and os.path.exists(stage1_ckpt_path):
         try:
@@ -238,6 +237,7 @@ def main():
             print(f"Loaded existing checkpoint from {stage1_ckpt_path}")
         except Exception:
             pass
+    tokenizer.init_from_dataset(train_set)
 
     # Baseline evaluation of calibrated structured codebooks
     init_val_res = evaluate_stage1(tokenizer, val_set, device=device)
@@ -280,8 +280,12 @@ def main():
     print("="*50)
 
     tokenizer = FactoredKinematicRVQ().to(device)
+    if os.path.exists(stage1_ckpt_path):
+        try:
+            tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
+        except Exception:
+            pass
     tokenizer.init_from_dataset(train_set)
-    tokenizer.load_state_dict(torch.load(stage1_ckpt_path, map_location=device))
     tokenizer.eval()
 
     transformer = NextScaleTransformer(d_model=args.d_model, n_heads=4, num_layers=args.num_layers, dropout=0.0).to(device)

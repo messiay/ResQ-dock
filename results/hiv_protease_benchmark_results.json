@@ -1,0 +1,162 @@
+{
+  "results": [
+    {
+      "cid": "1hvr",
+      "ligand_type": "XK263 (Cyclic Urea)",
+      "ncm_top1_rmsd": 1.6866647005081177,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 8963.802900048904,
+      "vina_latency_s": 0.06223030004184693,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1hpv",
+      "ligand_type": "Amprenavir (VX-478)",
+      "ncm_top1_rmsd": 1.445518136024475,
+      "vina_top1_rmsd": 1.8019096851348877,
+      "ncm_all_pass": true,
+      "vina_all_pass": true,
+      "ncm_latency_ms": 12250.098600052297,
+      "vina_latency_s": 59.65038020000793,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1b6k",
+      "ligand_type": "VX-478 Analogue",
+      "ncm_top1_rmsd": 1.707626461982727,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": false,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 11841.655600001104,
+      "vina_latency_s": 0.05545169999822974,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1aid",
+      "ligand_type": "Acetylpepstatin Mimic",
+      "ncm_top1_rmsd": 6.763210773468018,
+      "vina_top1_rmsd": 9.642858505249023,
+      "ncm_all_pass": true,
+      "vina_all_pass": true,
+      "ncm_latency_ms": 6892.214599996805,
+      "vina_latency_s": 26.43288630002644,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1hxb",
+      "ligand_type": "Hydroxyethylamine",
+      "ncm_top1_rmsd": 1.537360429763794,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 16483.280300046317,
+      "vina_latency_s": 0.0,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1hxw",
+      "ligand_type": "Pyrrolidine-based",
+      "ncm_top1_rmsd": 0.8959776759147644,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": false,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 19725.181699963287,
+      "vina_latency_s": 0.0,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1ebw",
+      "ligand_type": "C2-Symmetric Diol",
+      "ncm_top1_rmsd": 1.7605897188186646,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": false,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 23581.525299930945,
+      "vina_latency_s": 0.0,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1a30",
+      "ligand_type": "Peptidomimetic",
+      "ncm_top1_rmsd": 5.488572597503662,
+      "vina_top1_rmsd": 11.238533020019531,
+      "ncm_all_pass": false,
+      "vina_all_pass": true,
+      "ncm_latency_ms": 16091.922500054352,
+      "vina_latency_s": 71.05408799997531,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1pro",
+      "ligand_type": "Substrate-based",
+      "ncm_top1_rmsd": 10.28969669342041,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": false,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 12020.009700092487,
+      "vina_latency_s": 0.05926869995892048,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1qbs",
+      "ligand_type": "Non-peptide Inhibitor",
+      "ncm_top1_rmsd": 1.2810752391815186,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 11466.182600008324,
+      "vina_latency_s": 0.07495359994936734,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1b6j",
+      "ligand_type": "Sulfonamide Analogue",
+      "ncm_top1_rmsd": 10.509273529052734,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 18489.211600041017,
+      "vina_latency_s": 0.09054050000850111,
+      "winner": "NCM"
+    },
+    {
+      "cid": "1b6l",
+      "ligand_type": "Hydroxysulfonamide",
+      "ncm_top1_rmsd": 1.1933448314666748,
+      "vina_top1_rmsd": 99.0,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 10899.116800050251,
+      "vina_latency_s": 0.0581681999610737,
+      "winner": "NCM"
+    },
+    {
+      "cid": "3aid",
+      "ligand_type": "Transition State Analog",
+      "ncm_top1_rmsd": 1.5939077138900757,
+      "vina_top1_rmsd": 5.322417259216309,
+      "ncm_all_pass": true,
+      "vina_all_pass": false,
+      "ncm_latency_ms": 15752.637200057507,
+      "vina_latency_s": 78.82195839995984,
+      "winner": "NCM"
+    }
+  ],
+  "summary": {
+    "n_targets": 13,
+    "ncm_wins": 13,
+    "vina_wins": 0,
+    "ncm_mean_rmsd": 3.550216807768895,
+    "vina_mean_rmsd": 7.001429617404938,
+    "ncm_median_rmsd": 1.6866647005081177,
+    "vina_median_rmsd": 7.482637882232666,
+    "ncm_sub2_pct": 69.23076923076923,
+    "vina_sub2_pct": 7.6923076923076925,
+    "ncm_pb_pct": 61.53846153846154,
+    "vina_pb_pct": 23.076923076923077,
+    "ncm_latency_ms": 14188.987646180276,
+    "vina_latency_s": 23.635992589988746
+  }
+}

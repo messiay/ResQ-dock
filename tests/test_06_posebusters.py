@@ -217,10 +217,10 @@ Physical validity is verified via the official **PoseBusters suite (`posebusters
 - **Gate 6 Scope:** The 20 benchmark complexes above serve as an **engineering sanity check** to mathematically verify end-to-end integration: proving that `NextScaleTransformer` + `BeamSearchDocking` (B=8) can successfully overfit, parameterize, and transmit continuous articulated poses into `FreeSolvEAdapter` and the official `PoseBusters` test harness without autograd breakage or shape mismatches.
 - **Production Paper Benchmark Protocol:** For research publication, training must be executed strictly on the disjoint PDBBind v2020 general/refined set (19k+ structures), and evaluated against the held-out PoseBusters benchmark suite (428 blind complexes). No training seed or complex identity may be shared across train and test splits.
 """
-    with open("results/benchmark_table.md", "w", encoding="utf-8") as f:
+    with open("results/gate6_sanity_table.md", "w", encoding="utf-8") as f:
         f.write(benchmark_table_md)
         
-    print("\nSuccessfully generated results/benchmark_table.md")
+    print("\nSuccessfully generated results/gate6_sanity_table.md")
     
     # Assertions
     assert pct_rmsd2_unrelaxed >= 75.0, f"Unrelaxed RMSD < 2.0 Å {pct_rmsd2_unrelaxed:.1f}% below 75% target"
